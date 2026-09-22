@@ -1,0 +1,35 @@
+[project]
+name = "computer-use"
+version = "0.1.0"
+description = "在 Claude Code 里用自然语言操控本机 Windows 桌面的 MCP server"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.scripts]
+computer-use = "computer_use.server:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "types-pywin32>=306",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not realdesktop'"
+markers = [
+    "realdesktop: 需要真实 Windows 桌面会话，默认不跑（`pytest -m realdesktop` 单独跑）",
+]
+
+[tool.mypy]
+files = ["src", "tests"]
+python_version = "3.12"
+strict = true
