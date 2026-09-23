@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import io
 import json
 import os
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -20,6 +22,7 @@ import pytest
 import win32clipboard
 import win32con
 import win32gui
+import win32process
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from fastmcp.exceptions import ToolError
@@ -227,28 +230,16 @@ def test_中文打进记事本_原来的剪贴板内容被放回(
     custom = win32clipboard.RegisterClipboardFormat("computer-use-type-text-test")
     try:
         _put_clipboard(marker, custom, b"opaque")
-        window = _await_notepad(lambda: list_windows(desktop))
+        window = _await_notepad(lambda: list_windows(desktop), pid=notepad.pid)
 
         async def call() -> dict[str, Any]:
             async with Client(create_server(desktop)) as client:
                 await client.call_tool("declare_scope", {"handles": [window["handle"]]})
                 observed = await client.call_tool("observe_window", {"handle": window["handle"]})
-                meta = observed.data
-                size = meta["size"]
-                await client.call_tool(
-                    "click",
-                    {
-                        "screenshot_id": meta["screenshot_id"],
-                        "x": size["width"] // 2,
-                        "y": size["height"] // 2,
-                        "intent": "点记事本的编辑区",
-                        "dangerous": False,
-                    },
-                )
                 typed = await client.call_tool(
                     "type_text",
                     {
-                        "screenshot_id": meta["screenshot_id"],
+                        "screenshot_id": observed.data["screenshot_id"],
                         "text": "你好",
                         "intent": "在记事本里输入中文",
                         "dangerous": False,
@@ -257,10 +248,9 @@ def test_中文打进记事本_原来的剪贴板内容被放回(
                 return dict(typed.data)
 
         result = asyncio.run(call())
+        time.sleep(0.2)
 
-        edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
-        assert edit, "没找到记事本的编辑框"
-        assert win32gui.GetWindowText(edit) == "你好"
+        assert _edit_text(window["handle"]) == "你好"
         assert result["tier"] == "clipboard"
         assert result["clipboard_used"] is True
         assert result["window"]["handle"] == window["handle"]
@@ -273,16 +263,14 @@ def test_中文打进记事本_原来的剪贴板内容被放回(
 
 def test_逐字符注入能把中文打进记事本(notepad: subprocess.Popen[bytes]) -> None:
     desktop = Win32Desktop()
-    window = _await_notepad(lambda: list_windows(desktop))
-    edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
-    assert edit, "没找到记事本的编辑框"
-    win32gui.SetWindowText(edit, "")  # type: ignore[call-arg]
+    window = _await_notepad(lambda: list_windows(desktop), pid=notepad.pid)
     desktop.focus(window["handle"])
 
     for character in "你好":
         desktop.type_character(character)
+    time.sleep(0.3)
 
-    assert win32gui.GetWindowText(edit) == "你好"
+    assert _edit_text(window["handle"]) == "你好"
     assert win32gui.GetForegroundWindow() == window["handle"]
 
 
@@ -311,6 +299,23 @@ def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[
     window = _await_notepad(lambda: asyncio.run(call()))
 
     assert "记事本" in window["title"] or "Notepad" in window["title"]
+
+
+def _edit_text(handle: int) -> str:
+    """读记事本编辑框里的文字。
+
+    `GetWindowText` 对别的进程的控件只返回标题，读不到编辑框里刚敲进去的内容。
+    """
+
+    edit = win32gui.FindWindowEx(handle, 0, "Edit", None)
+    assert edit, "没找到记事本的编辑框"
+    send = ctypes.WinDLL("user32", use_last_error=True).SendMessageW
+    send.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    send.restype = ctypes.c_ssize_t
+    length = send(edit, win32con.WM_GETTEXTLENGTH, 0, 0)
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    send(edit, win32con.WM_GETTEXT, length + 1, ctypes.addressof(buffer))
+    return buffer.value
 
 
 def _put_clipboard(text: str, custom_format: int, custom: bytes) -> None:
@@ -377,14 +382,27 @@ def _dpi_unaware_cursor() -> tuple[int, int]:
 
 
 def _await_notepad(
-    observe: Callable[[], list[dict[str, Any]]], timeout: float = 15.0
+    observe: Callable[[], list[dict[str, Any]]],
+    timeout: float = 15.0,
+    pid: int | None = None,
 ) -> dict[str, Any]:
-    """等到记事本的窗口出现在观察里；窗口创建相对进程启动有延迟。"""
+    """等到记事本的窗口出现在观察里；窗口创建相对进程启动有延迟。
+
+    `pid` 给出时只认这个进程的窗口，免得桌面上还留着别的记事本。
+    """
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for window in observe():
-            if window["process_name"].lower() == "notepad.exe":
-                return window
+            if window["process_name"].lower() != "notepad.exe":
+                continue
+            if pid is not None and _process_id(window["handle"]) != pid:
+                continue
+            return window
         time.sleep(0.2)
     raise AssertionError(f"记事本的窗口在 {timeout}s 内没有出现在观察里")
+
+
+def _process_id(handle: int) -> int:
+    _, process_id = win32process.GetWindowThreadProcessId(handle)
+    return process_id
