@@ -274,6 +274,43 @@ def test_逐字符注入能把中文打进记事本(notepad: subprocess.Popen[by
     assert win32gui.GetForegroundWindow() == window["handle"]
 
 
+def test_启动记事本等到窗口_按键落进它(tmp_path: Path) -> None:
+    desktop = Win32Desktop(data_dir=tmp_path)
+    pids: set[int] = set()
+    try:
+
+        async def call() -> dict[str, Any]:
+            async with Client(create_server(desktop)) as client:
+                launched = await client.call_tool(
+                    "launch_app",
+                    {"app": "notepad", "intent": "打开记事本", "dangerous": False},
+                )
+                window = launched.data["window"]
+                await client.call_tool("declare_scope", {"handles": [window["handle"]]})
+                observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+                await client.call_tool(
+                    "press_keys",
+                    {
+                        "screenshot_id": observed.data["screenshot_id"],
+                        "keys": ["ctrl", "o"],
+                        "intent": "打开文件对话框",
+                        "dangerous": False,
+                    },
+                )
+                return dict(launched.data)
+
+        launched = asyncio.run(call())
+        handle = int(launched["window"]["handle"])
+        pids.add(int(launched["process_id"]))
+        pids.add(_process_id(handle))
+
+        assert launched["window"]["process_name"].lower() == "notepad.exe"
+        assert _await_dialog(desktop, handle), "Ctrl+O 没有在记事本里打开文件对话框"
+    finally:
+        for pid in pids:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+
+
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:
     """Claude Code 就是这样连上来的：拉起一个子进程，走 stdio 说 MCP。"""
 
@@ -286,10 +323,16 @@ def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[
             assert sorted(tool.name for tool in await client.list_tools()) == [
                 "click",
                 "declare_scope",
+                "double_click",
+                "drag",
                 "get_scope",
+                "launch_app",
                 "list_windows",
                 "observe_window",
+                "press_keys",
                 "resume",
+                "right_click",
+                "scroll",
                 "type_text",
                 "zoom",
             ]
@@ -379,6 +422,18 @@ def _dpi_unaware_cursor() -> tuple[int, int]:
     ).stdout
     x, y = output.split()
     return int(x), int(y)
+
+
+def _await_dialog(desktop: Win32Desktop, owner: int, timeout: float = 5.0) -> bool:
+    """等到 `owner` 弹出一个有标题的窗口，例如记事本的打开文件对话框。"""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for window in desktop.list_windows():
+            if window.owner == owner and window.title.casefold() in {"open", "打开"}:
+                return True
+        time.sleep(0.2)
+    return False
 
 
 def _await_notepad(

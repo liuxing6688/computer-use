@@ -133,15 +133,13 @@ _SYSTEM_SETTINGS = frozenset(
 _FILE_EXPLORER = "explorer.exe"
 
 
-def _high_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
-    """`window` 为何是高危窗口；不是时为 `None`。
+def risk_of_process(process_name: str) -> str | None:
+    """进程名为何使它的窗口成为高危窗口；不是时为 `None`。
 
-    所属进程认不出来时按高危处理：够不到的多半是提权进程，而提权的终端正是最危险的那一种。
+    进程名认不出来时按高危处理：够不到的多半是提权进程，而提权的终端正是最危险的那一种。
     """
 
-    name = window.process_name.lower()
-    if window.process_id in agent_processes:
-        return "Agent 自身所在的窗口"
+    name = process_name.lower()
     if not name:
         return "无法确认所属进程，可能是提权窗口"
     if name in _TERMINALS:
@@ -151,6 +149,14 @@ def _high_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
     if name == _FILE_EXPLORER:
         return "资源管理器，含桌面与任务栏"
     return None
+
+
+def _high_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
+    """`window` 为何是高危窗口；不是时为 `None`。"""
+
+    if window.process_id in agent_processes:
+        return "Agent 自身所在的窗口"
+    return risk_of_process(window.process_name)
 
 
 def _describe(window: Window) -> str:

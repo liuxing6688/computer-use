@@ -63,11 +63,29 @@ def main() -> None:
 
 def _describe(tool: str, arguments: Mapping[str, Any]) -> str:
     intent = arguments.get("intent")
-    if tool == "click":
+    point = {
+        "click": "单击",
+        "double_click": "双击",
+        "right_click": "右键单击",
+        "scroll": "滚动",
+    }
+    if tool in point:
         target = (
             f"在截图 {arguments.get('screenshot_id')} 的 "
-            f"({arguments.get('x')}, {arguments.get('y')}) 处单击"
+            f"({arguments.get('x')}, {arguments.get('y')}) 处{point[tool]}"
         )
+    elif tool == "drag":
+        target = (
+            f"在截图 {arguments.get('screenshot_id')} 上从 "
+            f"({arguments.get('x')}, {arguments.get('y')}) 拖到 "
+            f"({arguments.get('to_x')}, {arguments.get('to_y')})"
+        )
+    elif tool == "press_keys":
+        keys = arguments.get("keys")
+        chord = "+".join(str(key) for key in keys) if isinstance(keys, list) else str(keys)
+        target = f"在截图 {arguments.get('screenshot_id')} 的窗口按下 {chord}"
+    elif tool == "launch_app":
+        target = f"启动 {arguments.get('app')}"
     else:
         target = f"调用 {tool}，参数 {json.dumps(dict(arguments), ensure_ascii=False)}"
     return f"模型自述意图：「{intent}」；{target}。"

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import io
+import time
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from computer_use import actions, observation
 from computer_use.desktop import DesktopPort, Rect, Window
@@ -85,10 +86,136 @@ def click(
         dangerous=dangerous,
         pace=pace,
     )
-    return {
-        "window": _as_identity(landed.window),
-        "screen_point": {"x": landed.x, "y": landed.y},
-    }
+    return _as_landed(landed)
+
+
+def double_click(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：在某张截图的像素 `(x, y)` 处双击，返回实际落点。"""
+
+    return _as_landed(
+        actions.double_click(
+            desktop, screenshots, scope, screenshot_id, x, y,
+            intent=intent, dangerous=dangerous, pace=pace,
+        )
+    )
+
+
+def right_click(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：在某张截图的像素 `(x, y)` 处单击右键，返回实际落点。"""
+
+    return _as_landed(
+        actions.right_click(
+            desktop, screenshots, scope, screenshot_id, x, y,
+            intent=intent, dangerous=dangerous, pace=pace,
+        )
+    )
+
+
+def drag(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+    to_x: int,
+    to_y: int,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：从截图像素 `(x, y)` 拖到 `(to_x, to_y)`，返回两端的实际落点。"""
+
+    dragged = actions.drag(
+        desktop, screenshots, scope, screenshot_id, x, y, to_x, to_y,
+        intent=intent, dangerous=dangerous, pace=pace,
+    )
+    return {**_as_landed(dragged.start), "to": _as_landed(dragged.end)}
+
+
+def scroll(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+    notches: int,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：在某张截图的像素 `(x, y)` 处滚动，返回实际落点与格数。"""
+
+    landed = actions.scroll(
+        desktop, screenshots, scope, screenshot_id, x, y, notches,
+        intent=intent, dangerous=dangerous, pace=pace,
+    )
+    return {**_as_landed(landed), "notches": notches}
+
+
+def press_keys(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    keys: Sequence[str],
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：把组合键送进某张截图所属的窗口。"""
+
+    pressed = actions.press_keys(
+        desktop, screenshots, scope, screenshot_id, keys,
+        intent=intent, dangerous=dangerous, pace=pace,
+    )
+    return {"window": _as_identity(pressed.window), "keys": list(pressed.keys)}
+
+
+def launch_app(
+    desktop: DesktopPort,
+    app: str,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+    timeout: float = 15,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """输入工具：启动一个应用并等到它的新窗口。新窗口不进入任务作用域。"""
+
+    launched = actions.launch_app(
+        desktop, app,
+        intent=intent, dangerous=dangerous, pace=pace, timeout=timeout, clock=clock, sleep=sleep,
+    )
+    return {"window": _as_identity(launched.window), "process_id": launched.process_id}
 
 
 def type_text(
@@ -129,6 +256,13 @@ def resume(desktop: DesktopPort, pace: Pace) -> str:
     """显式恢复：解除急停，使输入工具重新可用。未急停时无事发生。"""
 
     return actions.resume(desktop, pace)
+
+
+def _as_landed(landed: actions.Landed) -> dict[str, Any]:
+    return {
+        "window": _as_identity(landed.window),
+        "screen_point": {"x": landed.x, "y": landed.y},
+    }
 
 
 def _as_identity(window: Window) -> dict[str, Any]:

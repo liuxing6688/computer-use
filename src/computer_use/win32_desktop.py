@@ -7,6 +7,7 @@ import ctypes
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -32,6 +33,7 @@ from computer_use.desktop import (
     ClipboardUnavailable,
     ForegroundError,
     InjectionError,
+    LaunchError,
     PaceState,
     Rect,
     TextUnreadable,
@@ -168,6 +170,10 @@ _INPUT_MOUSE = 0
 _INPUT_KEYBOARD = 1
 _MOUSEEVENTF_LEFTDOWN = 0x0002
 _MOUSEEVENTF_LEFTUP = 0x0004
+_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_MOUSEEVENTF_RIGHTUP = 0x0010
+_MOUSEEVENTF_WHEEL = 0x0800
+_WHEEL_DELTA = 120
 _KEYEVENTF_KEYUP = 0x0002
 _KEYEVENTF_UNICODE = 0x0004
 _VK_CONTROL = 0x11
@@ -256,18 +262,50 @@ class Win32Desktop:
     def click(self, x: int, y: int) -> None:
         """把光标移到 `(x, y)` 再按下、抬起左键。
 
-        先 `SetCursorPos` 再注入不带坐标的按键：`SendInput` 的绝对坐标要归一化到 0–65535，
-        取整会让落点偏一个像素，而 `SetCursorPos` 是精确的。
         鼠标输入送往光标下的窗口并顺带激活它，不必先 `SetForegroundWindow`；键盘输入才须如此。
         """
 
-        if not _user32.SetCursorPos(x, y):
-            raise ctypes.WinError(ctypes.get_last_error())
-        cursor = wintypes.POINT()
-        _user32.GetCursorPos(ctypes.byref(cursor))
-        if (cursor.x, cursor.y) != (x, y):
-            raise OSError(f"光标没能移到 ({x}, {y})，停在了 ({cursor.x}, {cursor.y})")
+        _place(x, y)
         _send(_mouse(_MOUSEEVENTF_LEFTDOWN), _mouse(_MOUSEEVENTF_LEFTUP))
+
+    def double_click(self, x: int, y: int) -> None:
+        _place(x, y)
+        _send(
+            _mouse(_MOUSEEVENTF_LEFTDOWN),
+            _mouse(_MOUSEEVENTF_LEFTUP),
+            _mouse(_MOUSEEVENTF_LEFTDOWN),
+            _mouse(_MOUSEEVENTF_LEFTUP),
+        )
+
+    def right_click(self, x: int, y: int) -> None:
+        _place(x, y)
+        _send(_mouse(_MOUSEEVENTF_RIGHTDOWN), _mouse(_MOUSEEVENTF_RIGHTUP))
+
+    def drag(self, x: int, y: int, to_x: int, to_y: int) -> None:
+        _place(x, y)
+        _send(_mouse(_MOUSEEVENTF_LEFTDOWN))
+        try:
+            _place(to_x, to_y)
+        finally:
+            _send(_mouse(_MOUSEEVENTF_LEFTUP))
+
+    def scroll(self, x: int, y: int, notches: int) -> None:
+        _place(x, y)
+        _send(_mouse(_MOUSEEVENTF_WHEEL, notches * _WHEEL_DELTA))
+
+    def press_keys(self, keys: Sequence[str]) -> None:
+        virtual = [_virtual_key(key) for key in keys]
+        _send(
+            *(_key(code, 0) for code in virtual),
+            *(_key(code, _KEYEVENTF_KEYUP) for code in reversed(virtual)),
+        )
+
+    def launch(self, executable: str) -> int:
+        try:
+            process = subprocess.Popen([executable])
+        except OSError as error:
+            raise LaunchError(f"启动不了 {executable}：{error}") from error
+        return int(process.pid)
 
     def focus(self, handle: int) -> None:
         if not win32gui.IsWindow(handle):
@@ -414,14 +452,66 @@ class _StopHotkey:
                 cls.callback()
 
 
+def _place(x: int, y: int) -> None:
+    """把光标精确移到 `(x, y)`。
+
+    `SendInput` 的绝对坐标要归一化到 0–65535，取整会偏一个像素；`SetCursorPos` 是精确的。
+    """
+
+    if not _user32.SetCursorPos(x, y):
+        raise ctypes.WinError(ctypes.get_last_error())
+    cursor = wintypes.POINT()
+    _user32.GetCursorPos(ctypes.byref(cursor))
+    if (cursor.x, cursor.y) != (x, y):
+        raise OSError(f"光标没能移到 ({x}, {y})，停在了 ({cursor.x}, {cursor.y})")
+
+
 def _send(*inputs: _INPUT) -> None:
     array = (_INPUT * len(inputs))(*inputs)
     if _user32.SendInput(len(array), array, ctypes.sizeof(_INPUT)) != len(array):
         raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _mouse(flags: int) -> _INPUT:
-    return _INPUT(type=_INPUT_MOUSE, u=_INPUTUNION(mi=_MOUSEINPUT(dwFlags=flags)))
+def _mouse(flags: int, data: int = 0) -> _INPUT:
+    return _INPUT(
+        type=_INPUT_MOUSE,
+        u=_INPUTUNION(mi=_MOUSEINPUT(dwFlags=flags, mouseData=data & 0xFFFFFFFF)),
+    )
+
+
+_NAMED_KEYS = {
+    "enter": 0x0D,
+    "tab": 0x09,
+    "escape": 0x1B,
+    "space": 0x20,
+    "backspace": 0x08,
+    "delete": 0x2E,
+    "insert": 0x2D,
+    "home": 0x24,
+    "end": 0x23,
+    "pageup": 0x21,
+    "pagedown": 0x22,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "ctrl": 0x11,
+    "alt": 0x12,
+    "shift": 0x10,
+    "win": 0x5B,
+}
+
+
+def _virtual_key(name: str) -> int:
+    if name in _NAMED_KEYS:
+        return _NAMED_KEYS[name]
+    if len(name) == 1 and "a" <= name <= "z":
+        return ord(name.upper())
+    if len(name) == 1 and "0" <= name <= "9":
+        return ord(name)
+    if name.startswith("f") and name[1:].isdigit() and 1 <= int(name[1:]) <= 12:
+        return 0x70 + int(name[1:]) - 1
+    raise InjectionError(f"不认识的按键：{name}")
 
 
 def _key(virtual_key: int, flags: int) -> _INPUT:

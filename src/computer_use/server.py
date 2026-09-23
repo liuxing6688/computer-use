@@ -14,11 +14,13 @@ from mcp.types import TextContent
 
 from computer_use import tools
 from computer_use.action_log import ActionLog, Intercepted
+from computer_use.actions import ActionError
 from computer_use.desktop import (
     ClipboardUnavailable,
     DesktopPort,
     ForegroundError,
     InjectionError,
+    LaunchError,
     Rect,
 )
 from computer_use.observation import ObservationError, Screenshots
@@ -32,8 +34,12 @@ INSTRUCTIONS = f"""\
 窗口一律以 `handle` 指称；`list_windows` 的矩形为屏幕物理像素。
 观察与放大返回的截图各带一个 `screenshot_id`；指称截图上的位置时，一律用那张截图的像素坐标，
 换算到屏幕由服务端完成。
-动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击或文本输入落在任务作用域之外、
-或落在高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时一律被拒绝。
+动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击、双击、右键、拖拽、滚动、按键或文本输入
+落在任务作用域之外、或落在高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时一律被拒绝。
+`press_keys` 发送组合键与功能键。Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete
+会离开目标窗口，一律拒绝。
+`launch_app` 启动一个 .exe 并等待它的新窗口；超时会说明期间出现了哪些别的窗口。
+新窗口不会自动进入任务作用域。不能用来启动终端、系统设置、资源管理器或脚本宿主。
 点击前服务端会重新采集落点附近，与那张截图比对；界面在此期间变了就拒绝执行，此时请重新观察。
 输入文本用 `type_text`，打进目标窗口当前的焦点输入框。中文优先走剪贴板粘贴，原剪贴板内容会在事后恢复；
 粘贴走不通时改为逐字符注入。返回里写明实际走了哪一档，以及是否占用过剪贴板。
@@ -174,6 +180,172 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         )
 
     @mcp.tool
+    def double_click(
+        screenshot_id: str, x: int, y: int, intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """在某张截图的像素 `(x, y)` 处双击鼠标左键。
+
+        坐标、命中测试、截图比对与危险判定都与 `click` 相同。
+        `intent` 用一句话说明这次双击要做什么，记入动作日志。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="double_click",
+                target={"window": window, "screenshot_id": screenshot_id, "x": x, "y": y},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.double_click(
+                    desktop, screenshots, scope, screenshot_id, x, y,
+                    intent=intent, dangerous=dangerous, pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def right_click(
+        screenshot_id: str, x: int, y: int, intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """在某张截图的像素 `(x, y)` 处单击鼠标右键。
+
+        坐标、命中测试、截图比对与危险判定都与 `click` 相同。
+        `intent` 用一句话说明这次右键要做什么，记入动作日志。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="right_click",
+                target={"window": window, "screenshot_id": screenshot_id, "x": x, "y": y},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.right_click(
+                    desktop, screenshots, scope, screenshot_id, x, y,
+                    intent=intent, dangerous=dangerous, pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def drag(
+        screenshot_id: str, x: int, y: int, to_x: int, to_y: int, intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """在某张截图上从像素 `(x, y)` 拖到 `(to_x, to_y)`。
+
+        两个点都用这张截图的像素坐标，都要落在任务作用域内。起点还要通过截图比对。
+        `intent` 用一句话说明这次拖拽要做什么，记入动作日志。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="drag",
+                target={
+                    "window": window,
+                    "screenshot_id": screenshot_id,
+                    "x": x,
+                    "y": y,
+                    "to_x": to_x,
+                    "to_y": to_y,
+                },
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.drag(
+                    desktop, screenshots, scope, screenshot_id, x, y, to_x, to_y,
+                    intent=intent, dangerous=dangerous, pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def scroll(
+        screenshot_id: str, x: int, y: int, notches: int, intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """在某张截图的像素 `(x, y)` 处滚动滚轮。
+
+        `notches` 为正向上、为负向下，一格是一次滚轮凹口。落点的命中测试与截图比对和 `click` 相同。
+        `intent` 用一句话说明这次滚动要做什么，记入动作日志。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="scroll",
+                target={
+                    "window": window,
+                    "screenshot_id": screenshot_id,
+                    "x": x,
+                    "y": y,
+                    "notches": notches,
+                },
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.scroll(
+                    desktop, screenshots, scope, screenshot_id, x, y, notches,
+                    intent=intent, dangerous=dangerous, pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def press_keys(
+        screenshot_id: str, keys: list[str], intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """把组合键或功能键送进某张截图所属的窗口。
+
+        `keys` 按按下的顺序给出，例如 `["ctrl", "s"]`、`["f5"]`、`["alt", "f4"]`。
+        字母、数字、功能键 f1–f12，以及 enter、tab、escape、space、backspace、delete、insert、
+        home、end、pageup、pagedown、方向键都可以。先把该窗口带到前台，没能到前台就不按。
+        Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete 会离开目标窗口，一律拒绝。
+        `intent` 用一句话说明这次按键要做什么，记入动作日志。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="press_keys",
+                target={"window": window, "screenshot_id": screenshot_id, "keys": keys},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.press_keys(
+                    desktop, screenshots, scope, screenshot_id, keys,
+                    intent=intent, dangerous=dangerous, pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def launch_app(app: str, intent: str, dangerous: bool) -> dict[str, Any]:
+        """启动一个应用并等待它的新窗口，以便任务能从零开始。
+
+        `app` 是程序名或 .exe 路径，不带参数；没有扩展名时按 .exe 启动。
+        等到一个新出现的、属于这个进程（或同名可执行文件）的可见窗口再返回。
+        15 秒内没出现就报错，并说明期间新出现了哪些别的窗口。
+        新窗口不会加入任务作用域，要用它之前先 `declare_scope`。
+        终端、系统设置、资源管理器、命令解释器与脚本宿主不能从这里启动。
+        `intent` 用一句话说明为什么启动它，记入动作日志。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="launch_app",
+                target={"app": app},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=None,
+                action=lambda: tools.launch_app(
+                    desktop, app, intent=intent, dangerous=dangerous, pace=pace
+                ),
+            )
+        )
+
+    @mcp.tool
     def type_text(screenshot_id: str, text: str, intent: str, dangerous: bool) -> dict[str, Any]:
         """把文本打进某张截图所属窗口当前的焦点输入框，可以包含中文。
 
@@ -247,9 +419,11 @@ def _refusal_as_tool_error(call: Callable[[], T]) -> T:
         ObservationError,
         ScopeError,
         Intercepted,
+        ActionError,
         ForegroundError,
         ClipboardUnavailable,
         InjectionError,
+        LaunchError,
     ) as error:
         raise ToolError(str(error)) from error
 

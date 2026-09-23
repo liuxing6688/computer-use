@@ -76,6 +76,10 @@ class InjectionError(Exception):
     """逐字符注入没能把字符送进前台窗口。"""
 
 
+class LaunchError(Exception):
+    """进程没能启动。"""
+
+
 @dataclass(frozen=True)
 class Clipboard:
     """一份剪贴板内容。核心不解释 `content`，只在保存与恢复之间原样交还。"""
@@ -125,6 +129,30 @@ class DesktopPort(Protocol):
 
     def click(self, x: int, y: int) -> None:
         """在屏幕物理像素 `(x, y)` 处单击鼠标左键。"""
+        ...
+
+    def double_click(self, x: int, y: int) -> None:
+        """在屏幕物理像素 `(x, y)` 处双击鼠标左键。"""
+        ...
+
+    def right_click(self, x: int, y: int) -> None:
+        """在屏幕物理像素 `(x, y)` 处单击鼠标右键。"""
+        ...
+
+    def drag(self, x: int, y: int, to_x: int, to_y: int) -> None:
+        """按住左键从 `(x, y)` 拖到 `(to_x, to_y)`，坐标都是屏幕物理像素。"""
+        ...
+
+    def scroll(self, x: int, y: int, notches: int) -> None:
+        """在 `(x, y)` 处滚动滚轮。`notches` 为正向上、为向下，一格是一次凹口。"""
+        ...
+
+    def press_keys(self, keys: Sequence[str]) -> None:
+        """按顺序按下 `keys` 再逆序松开，组成一次组合键。名字由核心规范过。"""
+        ...
+
+    def launch(self, executable: str) -> int:
+        """启动 `executable`，不经 shell、不附带参数，返回进程号。启动不了时抛 `LaunchError`。"""
         ...
 
     def focus(self, handle: int) -> None:

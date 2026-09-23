@@ -1,0 +1,524 @@
+"""双击、右键、拖拽、滚动、组合键，以及启动应用并等待它的窗口。
+
+落点与按键都要过任务作用域和命中测试；启动不能打开高危窗口或脚本宿主。
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Callable
+
+import pytest
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
+
+from computer_use.action_log import Intercepted
+from computer_use.actions import ActionError
+from computer_use.desktop import ForegroundError, LaunchError, Rect
+from computer_use.hook import decide
+from computer_use.observation import ObservationError, Screenshots
+from computer_use.scope import TaskScope
+from computer_use.server import create_server
+from computer_use.tools import (
+    declare_scope,
+    double_click,
+    drag,
+    get_scope,
+    launch_app,
+    observe_window,
+    press_keys,
+    right_click,
+    scroll,
+)
+
+from .fake_desktop import FakeDesktop, window
+
+
+def _ready(
+    desktop: FakeDesktop | None = None,
+) -> tuple[FakeDesktop, Screenshots, TaskScope, str]:
+    desktop = desktop or FakeDesktop(
+        [window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240))]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id: str = observe_window(desktop, screenshots, 1).metadata["screenshot_id"]
+    return desktop, screenshots, scope, screenshot_id
+
+
+def _frozen_clock() -> tuple[list[float], Callable[[], float], Callable[[float], None]]:
+    now = [0.0]
+
+    def clock() -> float:
+        return now[0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    return now, clock, sleep
+
+
+def test_双击按截图像素坐标落到屏幕上() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    result = double_click(
+        desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开文件", dangerous=False
+    )
+
+    assert desktop.double_clicks == [(510, 220)]
+    assert result["screen_point"] == {"x": 510, "y": 220}
+    assert result["window"]["handle"] == 1
+
+
+def test_右键按截图像素坐标落到屏幕上() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    right_click(
+        desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开菜单", dangerous=False
+    )
+
+    assert desktop.right_clicks == [(510, 220)]
+
+
+def test_拖拽的起点和终点都换算到屏幕() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    result = drag(
+        desktop,
+        screenshots,
+        scope,
+        screenshot_id,
+        10,
+        20,
+        30,
+        40,
+        intent="框选",
+        dangerous=False,
+    )
+
+    assert desktop.drags == [(510, 220, 530, 240)]
+    assert result["screen_point"] == {"x": 510, "y": 220}
+    assert result["to"]["screen_point"] == {"x": 530, "y": 240}
+
+
+def test_拖拽终点在作用域外时不注入() -> None:
+    desktop = FakeDesktop(
+        [
+            window(handle=2, title="别的窗口", process_name="other.exe", rect=Rect(500, 200, 40, 40)),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240)),
+        ]
+    )
+    _, screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="任务作用域之外"):
+        drag(
+            desktop, screenshots, scope, screenshot_id, 200, 100, 10, 10,
+            intent="拖出去", dangerous=False,
+        )
+
+    assert desktop.drags == []
+
+
+def test_落点被挡住时右键被拦截且不注入() -> None:
+    desktop = FakeDesktop(
+        [
+            window(handle=2, title="弹出的广告", process_name="ad.exe", rect=Rect(500, 200, 80, 80)),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240)),
+        ]
+    )
+    _, screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="弹出的广告"):
+        right_click(
+            desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开菜单", dangerous=False
+        )
+
+    assert desktop.right_clicks == []
+
+
+def test_高危窗口上的双击被拦截() -> None:
+    desktop = FakeDesktop([window(handle=1, title="管理员: Windows PowerShell", process_name="pwsh.exe")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+
+    with pytest.raises(Intercepted, match="终端"):
+        double_click(
+            desktop, screenshots, scope, _shot(desktop, screenshots), 10, 10,
+            intent="点进去", dangerous=False,
+        )
+
+    assert desktop.double_clicks == []
+
+
+def test_滚动按凹口数注入_零格被拒绝() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    scroll(
+        desktop, screenshots, scope, screenshot_id, 10, 20, -2, intent="往下翻", dangerous=False
+    )
+
+    assert desktop.scrolls == [(510, 220, -2)]
+    with pytest.raises(ActionError, match="滚动"):
+        scroll(
+            desktop, screenshots, scope, screenshot_id, 10, 20, 0, intent="空滚", dangerous=False
+        )
+    assert desktop.scrolls == [(510, 220, -2)]
+
+
+def test_不在截图内的坐标不注入右键() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    with pytest.raises(ObservationError):
+        right_click(
+            desktop, screenshots, scope, screenshot_id, 320, 0, intent="点外面", dangerous=False
+        )
+
+    assert desktop.right_clicks == []
+
+
+def test_自报危险的双击未经裁决不执行() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    with pytest.raises(Intercepted, match="裁决"):
+        double_click(
+            desktop, screenshots, scope, screenshot_id, 10, 20, intent="删除", dangerous=True
+        )
+
+    assert desktop.double_clicks == []
+
+
+def test_组合键先把目标窗口带到前台再按下() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    result = press_keys(
+        desktop, screenshots, scope, screenshot_id, ["Ctrl", "S"], intent="保存", dangerous=False
+    )
+
+    assert desktop.trace == [("focus", 1)]
+    assert desktop.chords == [("ctrl", "s")]
+    assert result["keys"] == ["ctrl", "s"]
+    assert result["window"]["handle"] == 1
+
+
+def test_功能键可以单独按下() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    press_keys(desktop, screenshots, scope, screenshot_id, ["F5"], intent="刷新", dangerous=False)
+
+    assert desktop.chords == [("f5",)]
+
+
+@pytest.mark.parametrize(
+    ("keys", "reason"),
+    [
+        (["win", "r"], "Windows 键"),
+        (["alt", "tab"], r"Alt\+Tab"),
+        (["alt", "shift", "tab"], r"Alt\+Tab"),
+        (["ctrl", "escape"], r"Ctrl\+Esc"),
+        (["ctrl", "shift", "escape"], r"Ctrl\+Esc"),
+        (["alt", "escape"], r"Alt\+Esc"),
+        (["ctrl", "alt", "delete"], r"Ctrl\+Alt\+Delete"),
+    ],
+)
+def test_交给系统的组合键被拦截_不抢前台也不注入(keys: list[str], reason: str) -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    with pytest.raises(Intercepted, match=reason):
+        press_keys(desktop, screenshots, scope, screenshot_id, keys, intent="切走", dangerous=False)
+
+    assert desktop.trace == []
+    assert desktop.chords == []
+
+
+def test_不认识的按键被拒绝_不注入() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    with pytest.raises(ActionError, match="volume"):
+        press_keys(
+            desktop, screenshots, scope, screenshot_id, ["volume"], intent="调音量", dangerous=False
+        )
+
+    assert desktop.chords == []
+
+
+def test_作用域外的窗口不接受按键() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1), window(handle=2, title="计算器", rect=Rect(900, 0, 100, 100))]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [2])
+
+    with pytest.raises(Intercepted, match="任务作用域之外"):
+        press_keys(
+            desktop, screenshots, scope, _shot(desktop, screenshots, 1), ["enter"],
+            intent="确认", dangerous=False,
+        )
+
+    assert desktop.chords == []
+
+
+def test_窗口没能来到前台时不注入按键() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+    desktop.focus_fails = True
+
+    with pytest.raises(ForegroundError):
+        press_keys(
+            desktop, screenshots, scope, screenshot_id, ["a"], intent="输入", dangerous=False
+        )
+
+    assert desktop.chords == []
+
+
+def test_启动应用后等到它的新窗口_作用域不变() -> None:
+    desktop = FakeDesktop()
+    scope = TaskScope()
+    desktop.spawn = [
+        window(handle=9, title="无标题 - 记事本", process_name="notepad.exe", process_id=4242)
+    ]
+    _, clock, sleep = _frozen_clock()
+
+    result = launch_app(
+        desktop, "notepad", intent="打开记事本", dangerous=False, clock=clock, sleep=sleep
+    )
+
+    assert desktop.launched == ["notepad.exe"]
+    assert result == {
+        "window": {"handle": 9, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
+        "process_id": 4242,
+    }
+    assert get_scope(scope) == []
+
+
+def test_新窗口进程号不同但可执行文件名相同也算它出现了() -> None:
+    desktop = FakeDesktop()
+    desktop.spawn = [
+        window(handle=9, title="记事本", process_name="notepad.exe", process_id=7)
+    ]
+    _, clock, sleep = _frozen_clock()
+
+    result = launch_app(
+        desktop, "notepad", intent="打开记事本", dangerous=False, clock=clock, sleep=sleep
+    )
+
+    assert result["window"]["handle"] == 9
+
+
+def test_已经在的窗口不算这次启动出来的() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="无标题 - 记事本", process_name="notepad.exe", process_id=7)]
+    )
+    _, clock, sleep = _frozen_clock()
+
+    with pytest.raises(ActionError, match="超时") as error:
+        launch_app(
+            desktop, "notepad", intent="再开一个", dangerous=False,
+            timeout=1, clock=clock, sleep=sleep,
+        )
+
+    assert "已经在运行" in str(error.value)
+    assert "句柄 1" not in str(error.value)
+
+
+def test_超时错误点名期间新出现的不相干窗口() -> None:
+    desktop = FakeDesktop()
+    now, clock, _sleep = _frozen_clock()
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+        if now[0] == seconds:
+            desktop.add_window(
+                window(handle=4, title="弹出的广告", process_name="ad.exe", process_id=8)
+            )
+
+    with pytest.raises(ActionError, match="超时") as error:
+        launch_app(
+            desktop, "notepad", intent="打开记事本", dangerous=False,
+            timeout=1, clock=clock, sleep=sleep,
+        )
+
+    message = str(error.value)
+    assert "弹出的广告" in message
+    assert "ad.exe" in message
+    assert desktop.launched == ["notepad.exe"]
+
+
+def test_稍晚出现的窗口赶在超时前被等到() -> None:
+    desktop = FakeDesktop()
+    now, clock, _sleep = _frozen_clock()
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+        if now[0] >= 0.4:
+            desktop.add_window(
+                window(handle=9, title="无标题 - 记事本", process_name="notepad.exe", process_id=4242)
+            )
+
+    result = launch_app(
+        desktop, "notepad", intent="打开记事本", dangerous=False,
+        timeout=1, clock=clock, sleep=sleep,
+    )
+
+    assert result["window"]["handle"] == 9
+    assert now[0] < 1
+
+
+@pytest.mark.parametrize(
+    ("app", "reason"),
+    [
+        ("cmd", "终端"),
+        ("powershell", "终端"),
+        ("explorer.exe", "资源管理器"),
+        ("wscript", "脚本宿主"),
+        ("mshta.exe", "脚本宿主"),
+    ],
+)
+def test_不启动高危程序或脚本宿主(app: str, reason: str) -> None:
+    desktop = FakeDesktop()
+
+    with pytest.raises(Intercepted, match=reason):
+        launch_app(desktop, app, intent="跑一下", dangerous=False)
+
+    assert desktop.launched == []
+
+
+@pytest.mark.parametrize("app", ["notepad.bat", "notepad.exe /a", ""])
+def test_只能启动不带参数的_exe(app: str) -> None:
+    desktop = FakeDesktop()
+
+    with pytest.raises(ActionError):
+        launch_app(desktop, app, intent="打开", dangerous=False)
+
+    assert desktop.launched == []
+
+
+def test_带路径的_exe_按文件名认定() -> None:
+    desktop = FakeDesktop()
+    desktop.spawn = [
+        window(handle=9, title="无标题 - 记事本", process_name="notepad.exe", process_id=4242)
+    ]
+    _, clock, sleep = _frozen_clock()
+
+    launch_app(
+        desktop,
+        r"C:\Windows\System32\notepad.exe",
+        intent="打开记事本",
+        dangerous=False,
+        clock=clock,
+        sleep=sleep,
+    )
+
+    assert desktop.launched == [r"C:\Windows\System32\notepad.exe"]
+
+
+def test_程序启动失败时把原因交回去_没有进程() -> None:
+    desktop = FakeDesktop()
+    desktop.launch_error = "系统找不到指定的文件。"
+
+    with pytest.raises(LaunchError, match="找不到"):
+        launch_app(desktop, "missing", intent="打开", dangerous=False)
+
+    assert desktop.launched == ["missing.exe"]
+
+
+def test_急停之后不再启动() -> None:
+    from computer_use.desktop import PaceState
+
+    desktop = FakeDesktop()
+    desktop.write_pace(PaceState(stopped=True))
+
+    with pytest.raises(Intercepted, match="急停"):
+        launch_app(desktop, "notepad", intent="打开记事本", dangerous=False)
+
+    assert desktop.launched == []
+
+
+def test_hook_把自报危险的双击交给人() -> None:
+    desktop = FakeDesktop()
+    arguments = {
+        "screenshot_id": "shot-1",
+        "x": 1,
+        "y": 2,
+        "intent": "删除",
+        "dangerous": True,
+    }
+
+    output = decide(desktop, {"tool_name": "mcp__computer-use__double_click", "tool_input": arguments})
+
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日志() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="无标题 - 记事本", rect=Rect(100, 50, 320, 240))]
+    )
+    desktop.spawn = [
+        window(handle=9, title="计算器", process_name="calc.exe", process_id=4242)
+    ]
+
+    async def call() -> tuple[dict[str, Any], str, dict[str, Any]]:
+        async with Client(create_server(desktop)) as client:
+            names = {tool.name for tool in await client.list_tools()}
+            assert {
+                "double_click",
+                "right_click",
+                "drag",
+                "scroll",
+                "press_keys",
+                "launch_app",
+            } <= names
+            await client.call_tool("declare_scope", {"handles": [1]})
+            observed = await client.call_tool("observe_window", {"handle": 1})
+            screenshot_id = observed.data["screenshot_id"]
+            clicked = await client.call_tool(
+                "double_click",
+                {"screenshot_id": screenshot_id, "x": 10, "y": 20, "intent": "打开", "dangerous": False},
+            )
+            with pytest.raises(ToolError, match="Alt\\+Tab") as refused:
+                await client.call_tool(
+                    "press_keys",
+                    {
+                        "screenshot_id": screenshot_id,
+                        "keys": ["alt", "tab"],
+                        "intent": "切走",
+                        "dangerous": False,
+                    },
+                )
+            launched = await client.call_tool(
+                "launch_app", {"app": "calc", "intent": "打开计算器", "dangerous": False}
+            )
+            scope = await client.call_tool("get_scope", {})
+            assert scope.data == [
+                {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"}
+            ]
+            return dict(clicked.data), str(refused.value), dict(launched.data)
+
+    clicked, refusal, launched = asyncio.run(call())
+
+    assert clicked["screen_point"] == {"x": 110, "y": 70}
+    assert desktop.double_clicks == [(110, 70)]
+    assert desktop.chords == []
+    assert "Alt+Tab" in refusal
+    assert launched["window"]["handle"] == 9
+    assert desktop.launched == ["calc.exe"]
+    by_tool = {record["tool"]: record for record in desktop.action_log()}
+    assert (by_tool["double_click"]["verdict"], by_tool["double_click"]["outcome"]) == (
+        "allowed",
+        "succeeded",
+    )
+    assert by_tool["double_click"]["intent"] == "打开"
+    assert (by_tool["press_keys"]["verdict"], by_tool["press_keys"]["outcome"]) == (
+        "intercepted",
+        "not_executed",
+    )
+    assert by_tool["press_keys"]["target"]["keys"] == ["alt", "tab"]
+    assert (by_tool["launch_app"]["verdict"], by_tool["launch_app"]["outcome"]) == (
+        "allowed",
+        "succeeded",
+    )
+    assert by_tool["launch_app"]["evidence"] is None
+
+
+def _shot(desktop: FakeDesktop, screenshots: Screenshots, handle: int = 1) -> str:
+    screenshot_id: str = observe_window(desktop, screenshots, handle).metadata["screenshot_id"]
+    return screenshot_id

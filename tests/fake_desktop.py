@@ -14,6 +14,7 @@ from computer_use.desktop import (
     ClipboardUnavailable,
     ForegroundError,
     InjectionError,
+    LaunchError,
     PaceState,
     Rect,
     TextUnreadable,
@@ -51,6 +52,15 @@ class FakeDesktop:
         self._texts = list(texts)
         self._unreadable = unreadable
         self.clicks: list[tuple[int, int]] = []
+        self.double_clicks: list[tuple[int, int]] = []
+        self.right_clicks: list[tuple[int, int]] = []
+        self.drags: list[tuple[int, int, int, int]] = []
+        self.scrolls: list[tuple[int, int, int]] = []
+        self.chords: list[tuple[str, ...]] = []
+        self.launched: list[str] = []
+        self.spawn: list[Window] = []
+        self.launch_pid = 4242
+        self.launch_error: str | None = None
         self.log_lines: list[str] = []
         self.evidence: dict[str, bytes] = {}
         self.tickets: dict[str, datetime] = {}
@@ -114,6 +124,32 @@ class FakeDesktop:
 
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
+
+    def double_click(self, x: int, y: int) -> None:
+        self.double_clicks.append((x, y))
+
+    def right_click(self, x: int, y: int) -> None:
+        self.right_clicks.append((x, y))
+
+    def drag(self, x: int, y: int, to_x: int, to_y: int) -> None:
+        self.drags.append((x, y, to_x, to_y))
+
+    def scroll(self, x: int, y: int, notches: int) -> None:
+        self.scrolls.append((x, y, notches))
+
+    def press_keys(self, keys: Sequence[str]) -> None:
+        self.chords.append(tuple(keys))
+
+    def launch(self, executable: str) -> int:
+        self.launched.append(executable)
+        if self.launch_error is not None:
+            raise LaunchError(self.launch_error)
+        self._windows[0:0] = list(self.spawn)
+        self.spawn = []
+        return self.launch_pid
+
+    def add_window(self, extra: Window) -> None:
+        self._windows.insert(0, extra)
 
     def focus(self, handle: int) -> None:
         self.trace.append(("focus", handle))
