@@ -8,18 +8,22 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
+from fastmcp.exceptions import ToolError
 from PIL import Image
 
 from computer_use.desktop import Rect
 from computer_use.observation import Screenshots
+from computer_use.server import create_server
 from computer_use.tools import list_windows, observe_window
 from computer_use.win32_desktop import Win32Desktop
 
@@ -69,6 +73,43 @@ def test_观察能截下记事本_几何为物理像素(notepad: subprocess.Pope
     dpi_scale, logical_width = _dpi_unaware_view(window["handle"])
     assert metadata["dpi_scale"] == dpi_scale
     assert abs(listed["width"] - logical_width * dpi_scale) <= 2
+
+
+def test_失败的调用在真实磁盘上留下日志与记事本的截图(
+    notepad: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    desktop = Win32Desktop(data_dir=tmp_path)
+    window = _await_notepad(lambda: list_windows(desktop))
+
+    async def call() -> None:
+        async with Client(create_server(desktop)) as client:
+            observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "zoom",
+                    {
+                        "screenshot_id": observed.data["screenshot_id"],
+                        "left": -1,
+                        "top": 0,
+                        "width": 10,
+                        "height": 10,
+                    },
+                )
+
+    asyncio.run(call())
+
+    lines = (tmp_path / "actions.jsonl").read_text(encoding="utf-8").splitlines()
+    observed, zoomed = (json.loads(line) for line in lines)
+    assert (observed["tool"], observed["outcome"], observed["evidence"]) == (
+        "observe_window",
+        "succeeded",
+        None,
+    )
+    assert (zoomed["tool"], zoomed["outcome"]) == ("zoom", "failed")
+    evidence = Path(zoomed["evidence"])
+    assert evidence.parent == tmp_path / "evidence"
+    assert Image.open(evidence).width >= 100
+    assert list((tmp_path / "evidence").iterdir()) == [evidence]
 
 
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import ctypes
+import os
+import secrets
 from ctypes import wintypes
+from datetime import datetime
+from pathlib import Path
 from typing import Sequence
 
 import win32con
@@ -61,10 +65,13 @@ class Win32Desktop:
     """用 Win32 API 采集真实桌面的事实。
 
     构造即声明 `PER_MONITOR_AWARE_V2`，因此窗口矩形一律是物理像素。
+    动作日志写在 `data_dir/actions.jsonl`，留证截图存在 `data_dir/evidence/`；
+    `data_dir` 缺省为 `%LOCALAPPDATA%\\computer-use`。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, data_dir: Path | None = None) -> None:
         _declare_dpi_awareness()
+        self._data_dir = data_dir or Path(os.environ["LOCALAPPDATA"]) / "computer-use"
 
     def list_windows(self) -> Sequence[Window]:
         windows: list[Window] = []
@@ -89,6 +96,20 @@ class Win32Desktop:
         return Capture(
             image=image, rect=frame, dpi_scale=_user32.GetDpiForWindow(handle) / 96
         )
+
+    def append_log(self, line: str) -> None:
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        with (self._data_dir / "actions.jsonl").open("a", encoding="utf-8") as log:
+            log.write(line + "\n")
+
+    def save_evidence(self, png: bytes) -> str:
+        directory = self._data_dir / "evidence"
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = directory / f"{stamp}-{secrets.token_hex(2)}.png"
+        with path.open("xb") as evidence:
+            evidence.write(png)
+        return str(path)
 
 
 def _print_window(handle: int, width: int, height: int) -> Image.Image:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Any, Callable
 
 from fastmcp import FastMCP
@@ -12,6 +13,7 @@ from fastmcp.utilities.types import Image
 from mcp.types import TextContent
 
 from computer_use import tools
+from computer_use.action_log import ActionLog
 from computer_use.desktop import DesktopPort, Rect
 from computer_use.observation import ObservationError, Screenshots
 
@@ -28,6 +30,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
     mcp = FastMCP(name="computer-use", instructions=INSTRUCTIONS)
     screenshots = Screenshots()
+    log = ActionLog(desktop)
 
     @mcp.tool
     def list_windows() -> list[dict[str, Any]]:
@@ -36,7 +39,13 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         排除不可见、最小化与无标题的窗口。
         """
 
-        return tools.list_windows(desktop)
+        return log.run(
+            tool="list_windows",
+            target={},
+            intent=None,
+            evidence_window=None,
+            action=lambda: tools.list_windows(desktop),
+        )
 
     @mcp.tool
     def observe_window(handle: int) -> ToolResult:
@@ -47,7 +56,15 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         两个偏移都是物理像素，仅供参考；指称位置时只用截图像素坐标。
         """
 
-        return _observed_result(lambda: tools.observe_window(desktop, screenshots, handle))
+        return _observed_result(
+            lambda: log.run(
+                tool="observe_window",
+                target={"window": handle},
+                intent=None,
+                evidence_window=handle,
+                action=lambda: tools.observe_window(desktop, screenshots, handle),
+            )
+        )
 
     @mcp.tool
     def zoom(screenshot_id: str, left: int, top: int, width: int, height: int) -> ToolResult:
@@ -58,9 +75,27 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         """
 
         rect = Rect(left=left, top=top, width=width, height=height)
-        return _observed_result(lambda: tools.zoom(screenshots, screenshot_id, rect))
+        window = _window_of(screenshots, screenshot_id)
+        return _observed_result(
+            lambda: log.run(
+                tool="zoom",
+                target={"window": window, "screenshot_id": screenshot_id, "rect": asdict(rect)},
+                intent=None,
+                evidence_window=window,
+                action=lambda: tools.zoom(screenshots, screenshot_id, rect),
+            )
+        )
 
     return mcp
+
+
+def _window_of(screenshots: Screenshots, screenshot_id: str) -> int | None:
+    """截图所属窗口的句柄；截图 ID 解析不了时为 `None`，交由工具本身报错。"""
+
+    try:
+        return screenshots.resolve(screenshot_id).window.handle
+    except ObservationError:
+        return None
 
 
 def _observed_result(observe: Callable[[], tools.Observed]) -> ToolResult:

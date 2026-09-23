@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Collection, Mapping, Sequence
+import json
+from typing import Any, Collection, Mapping, Sequence
 
 from PIL import Image
 
@@ -13,7 +14,7 @@ class FakeDesktop:
     """按给定的窗口布局回答枚举，按预置截图回答截图，不需要真实桌面。
 
     没有预置截图的窗口截出来是一张与窗口等大的白图。`gone` 中的窗口仍会被枚举出来，
-    但截图时已经关掉了。
+    但截图时已经关掉了。动作日志与留证截图都留在内存里，按位置可查。
     """
 
     def __init__(
@@ -28,6 +29,8 @@ class FakeDesktop:
         self._images = dict(images or {})
         self._dpi_scale = dpi_scale
         self._gone = set(gone)
+        self.log_lines: list[str] = []
+        self.evidence: dict[str, bytes] = {}
 
     def list_windows(self) -> Sequence[Window]:
         return tuple(self._windows)
@@ -40,6 +43,20 @@ class FakeDesktop:
         image = self._images.get(handle) or Image.new("RGB", size, "white")
         assert image.size == size, "预置截图须与窗口矩形等大"
         return Capture(image=image, rect=window.rect, dpi_scale=self._dpi_scale)
+
+    def append_log(self, line: str) -> None:
+        assert "\n" not in line, "一条日志须是一行"
+        self.log_lines.append(line)
+
+    def save_evidence(self, png: bytes) -> str:
+        location = f"evidence/{len(self.evidence) + 1}.png"
+        self.evidence[location] = png
+        return location
+
+    def action_log(self) -> list[dict[str, Any]]:
+        """动作日志逐行解析后的记录。"""
+
+        return [json.loads(line) for line in self.log_lines]
 
 
 def window(

@@ -68,3 +68,11 @@ class DesktopPort(Protocol):
         窗口已经不在时抛 `WindowUnavailable`。
         """
         ...
+
+    def append_log(self, line: str) -> None:
+        """把一行记录追加到动作日志末尾。`line` 不含换行。"""
+        ...
+
+    def save_evidence(self, png: bytes) -> str:
+        """保存一张留证截图，返回它的位置，供日志引用。"""
+        ...

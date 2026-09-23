@@ -88,6 +88,53 @@ def test_观察不可操作的窗口经由_MCP_返回错误() -> None:
         asyncio.run(call())
 
 
+def test_每次工具调用都记入动作日志_失败的调用留下目标窗口的截图() -> None:
+    desktop = FakeDesktop(
+        [window(handle=0x1234, rect=Rect(left=100, top=50, width=320, height=240))],
+        images={0x1234: Image.new("RGB", (320, 240), "red")},
+    )
+
+    async def call() -> str:
+        async with Client(create_server(desktop)) as client:
+            await client.call_tool("list_windows", {})
+            observed = await client.call_tool("observe_window", {"handle": 0x1234})
+            screenshot_id: str = observed.data["screenshot_id"]
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "zoom",
+                    {"screenshot_id": screenshot_id, "left": 300, "top": 0, "width": 50, "height": 10},
+                )
+            with pytest.raises(ToolError):
+                await client.call_tool("observe_window", {"handle": 404})
+            return screenshot_id
+
+    screenshot_id = asyncio.run(call())
+
+    listed, observed, zoomed, missing = desktop.action_log()
+    assert (listed["tool"], listed["target"], listed["outcome"]) == ("list_windows", {}, "succeeded")
+    assert (observed["tool"], observed["target"]) == ("observe_window", {"window": 0x1234})
+    assert (observed["verdict"], observed["outcome"], observed["evidence"]) == (
+        "allowed",
+        "succeeded",
+        None,
+    )
+    assert zoomed["tool"] == "zoom"
+    assert zoomed["target"] == {
+        "window": 0x1234,
+        "screenshot_id": screenshot_id,
+        "rect": {"left": 300, "top": 0, "width": 50, "height": 10},
+    }
+    assert zoomed["outcome"] == "failed"
+    evidence = Image.open(io.BytesIO(desktop.evidence[zoomed["evidence"]]))
+    assert evidence.size == (320, 240)
+    assert (missing["target"], missing["outcome"], missing["evidence"]) == (
+        {"window": 404},
+        "failed",
+        None,
+    )
+    assert "404" in missing["detail"]
+
+
 def _image_size(result: CallToolResult) -> tuple[int, int]:
     [image] = [c for c in result.content if isinstance(c, ImageContent)]
     assert image.mime_type == "image/png"
