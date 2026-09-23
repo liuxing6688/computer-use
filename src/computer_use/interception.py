@@ -18,6 +18,7 @@ from typing import Any, Mapping
 from computer_use.action_log import Intercepted
 from computer_use.danger import Verdict
 from computer_use.desktop import DesktopPort
+from computer_use.pace import budget_block_message
 
 TICKET_LIFETIME = timedelta(minutes=10)
 """人可能要过一会儿才回应确认；超过这么久才抵达的调用，按未经裁决处理。"""
@@ -46,11 +47,7 @@ def require_ruling(
     if tool == "resume":
         raise Intercepted(f"{reasons}。请原样重新调用，由人在 Claude Code 中确认")
     if any("已达预算" in reason for reason in verdict.reasons) and arguments.get("dangerous") is not True:
-        raise Intercepted(
-            f"{reasons}，须经人确认才能继续。"
-            "请原样重新调用，由人在 Claude Code 中确认；"
-            "把 dangerous 改成 true 不会让它自己通过"
-        )
+        raise Intercepted(budget_block_message())
     if arguments.get("dangerous") is True:
         raise Intercepted(
             f"判为危险动作（{reasons}），但这次调用没有经过人的裁决。"

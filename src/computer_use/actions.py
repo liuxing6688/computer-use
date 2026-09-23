@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from computer_use.danger import Verdict, judge_call, judge_nearby_text, read_nearby
+from computer_use.action_log import Intercepted
 from computer_use.desktop import Clipboard, ClipboardUnavailable, DesktopPort, Window
 from computer_use.interception import require_ruling
 from computer_use.observation import Screenshots, confirm_unchanged
@@ -59,11 +60,16 @@ def click(
     verdict = judge_call("click", arguments) | judge_nearby_text(
         read_nearby(desktop, screenshot, screen_x, screen_y)
     )
-    if gate.over_budget():
+    cleared = gate.over_budget()
+    if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "click", arguments, verdict)
-    gate.wait_to_inject()
-    desktop.click(screen_x, screen_y)
+    gate.wait_to_inject(cleared=cleared)
+    try:
+        desktop.click(screen_x, screen_y)
+    except BaseException:
+        gate.abandon()
+        raise
     gate.mark_injected()
     return Landed(window=window, x=screen_x, y=screen_y)
 
@@ -106,12 +112,17 @@ def type_text(
         "dangerous": dangerous,
     }
     verdict = judge_call("type_text", arguments)
-    if gate.over_budget():
+    cleared = gate.over_budget()
+    if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "type_text", arguments, verdict)
-    gate.wait_to_inject()
-    desktop.focus(window.handle)
-    tier, clipboard_used = _deliver(desktop, text)
+    gate.wait_to_inject(cleared=cleared)
+    try:
+        desktop.focus(window.handle)
+        tier, clipboard_used = _deliver(desktop, text, gate)
+    except BaseException:
+        gate.abandon()
+        raise
     gate.mark_injected()
     return Typed(window=window, tier=tier, clipboard_used=clipboard_used)
 
@@ -126,26 +137,35 @@ def resume(desktop: DesktopPort, pace: Pace) -> str:
     return "已恢复，输入工具可以继续使用"
 
 
-def _deliver(desktop: DesktopPort, text: str) -> tuple[Literal["clipboard", "unicode"], bool]:
-    """先走剪贴板粘贴；读、写或粘贴失败时恢复剪贴板（若已经写过）再逐字符注入。"""
+def _deliver(
+    desktop: DesktopPort, text: str, pace: Pace
+) -> tuple[Literal["clipboard", "unicode"], bool]:
+    """先走剪贴板粘贴；读、写或粘贴失败时恢复剪贴板（若已经写过）再逐字符注入。
+
+    每个字符注入前都再看一眼急停，长文本也能在中途停下。
+    """
 
     try:
         snapshot = desktop.read_clipboard()
     except ClipboardUnavailable:
-        _type_characters(desktop, text)
+        _type_characters(desktop, text, pace)
         return "unicode", False
     try:
         desktop.set_clipboard_text(text)
     except ClipboardUnavailable:
         _restore(desktop, snapshot)
-        _type_characters(desktop, text)
+        _type_characters(desktop, text, pace)
         return "unicode", False
     try:
+        pace.reject_if_stopped()
         desktop.paste()
     except ClipboardUnavailable:
         _restore(desktop, snapshot)
-        _type_characters(desktop, text)
+        _type_characters(desktop, text, pace)
         return "unicode", True
+    except Intercepted:
+        _restore(desktop, snapshot)
+        raise
     _restore(desktop, snapshot)
     return "clipboard", True
 
@@ -157,6 +177,7 @@ def _restore(desktop: DesktopPort, snapshot: Clipboard) -> None:
         raise ClipboardUnavailable("原剪贴板内容没能恢复") from error
 
 
-def _type_characters(desktop: DesktopPort, text: str) -> None:
+def _type_characters(desktop: DesktopPort, text: str, pace: Pace) -> None:
     for character in text:
+        pace.reject_if_stopped()
         desktop.type_character(character)

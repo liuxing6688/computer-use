@@ -151,6 +151,54 @@ def test_文本输入与点击算相邻的输入动作() -> None:
     assert desktop.read_pace().streak == 2
 
 
+def test_重叠的输入仍按最小间隔排开() -> None:
+    desktop, screenshots, scope, screenshot_id, pace, clock = _ready()
+    click(desktop, screenshots, scope, screenshot_id, 10, 10, intent="点一下", dangerous=False, pace=pace)
+
+    def run(y: int) -> None:
+        click(
+            desktop, screenshots, scope, screenshot_id, 10, y,
+            intent="同时点", dangerous=False, pace=pace,
+        )
+
+    first, second = threading.Thread(target=run, args=(20,)), threading.Thread(target=run, args=(30,))
+    first.start()
+    second.start()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert len(desktop.clicks) == 3
+    assert clock.now == 2 * INPUT_INTERVAL
+
+
+def test_重叠的两次输入不会一起越过预算() -> None:
+    desktop, screenshots, scope, screenshot_id, pace, _clock = _ready()
+    _fill_budget(desktop, screenshots, scope, screenshot_id, pace, INPUT_BUDGET - 1)
+    errors: list[BaseException] = []
+
+    def run(y: int) -> None:
+        try:
+            click(
+                desktop, screenshots, scope, screenshot_id, 10, y,
+                intent="同时点", dangerous=False, pace=pace,
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    first, second = threading.Thread(target=run, args=(40,)), threading.Thread(target=run, args=(50,))
+    first.start()
+    second.start()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert len(desktop.clicks) == INPUT_BUDGET
+    assert len(errors) == 1
+    assert isinstance(errors[0], Intercepted)
+    assert "预算" in str(errors[0])
+
+
 def test_急停中止正在等待的输入并清空尚未注入的队列() -> None:
     sleeper = _BlockingSleep()
     desktop, screenshots, scope, screenshot_id, pace, _clock = _ready(sleep=sleeper)
@@ -169,7 +217,7 @@ def test_急停中止正在等待的输入并清空尚未注入的队列() -> No
     first, second = threading.Thread(target=run, args=(20,)), threading.Thread(target=run, args=(30,))
     first.start()
     second.start()
-    assert sleeper.arrived.acquire(timeout=2)
+    # 一次只放行一个输入：排在后面的卡在队首锁上，进不了这次等待。
     assert sleeper.arrived.acquire(timeout=2)
 
     pace.stop()
@@ -180,6 +228,26 @@ def test_急停中止正在等待的输入并清空尚未注入的队列() -> No
     assert len(errors) == 2
     assert all(isinstance(error, Intercepted) and "急停" in str(error) for error in errors)
     assert desktop.clicks == [(10, 10)]
+
+
+def test_急停会停住还没打完的逐字符输入() -> None:
+    desktop, screenshots, scope, screenshot_id, pace, _clock = _ready()
+    desktop.clipboard_read_fails = True
+
+    def stop_after_first(character: str) -> None:
+        FakeDesktop.type_character(desktop, character)
+        pace.stop()
+
+    desktop.type_character = stop_after_first  # type: ignore[method-assign]
+
+    with pytest.raises(Intercepted, match="急停"):
+        type_text(
+            desktop, screenshots, scope, screenshot_id, "你好",
+            intent="填写", dangerous=False, pace=pace,
+        )
+
+    assert desktop.characters == ["你"]
+    assert desktop.read_pace().streak == 0
 
 
 def test_急停后输入工具拒绝_只读工具与声明作用域仍可用_裁决凭据也不能把点击放行() -> None:
@@ -306,8 +374,9 @@ def _fill_budget(
     scope: TaskScope,
     screenshot_id: str,
     pace: Pace,
+    count: int = INPUT_BUDGET,
 ) -> None:
-    for n in range(INPUT_BUDGET):
+    for n in range(count):
         click(
             desktop, screenshots, scope, screenshot_id, 10, n,
             intent="点一下", dangerous=False, pace=pace,
