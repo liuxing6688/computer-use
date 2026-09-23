@@ -1,7 +1,9 @@
 """PreToolUse hook 薄壳：从标准输入读 Claude Code 的调用信息，判为危险时交给人裁决。
 
-判定用的是服务端同一个 `judge_call`。hook 看不到截图，落点附近的文字由服务端自己再看一眼；
+判定用的是服务端同一个 `judge_call`，连续输入已达预算时也会交给人。
+hook 看不到截图，落点附近的文字由服务端自己再看一眼；
 hook 放行而服务端判为危险的调用，会被服务端拦下并要求模型自报后重来，那时再经过这里。
+急停之后的输入工具不在这里交人：服务端会直接拒绝，交给人也执行不了。
 """
 
 from __future__ import annotations
@@ -11,9 +13,10 @@ import json
 import sys
 from typing import Any, Mapping, TextIO
 
-from computer_use.danger import judge_call
+from computer_use.danger import INPUT_TOOLS, Verdict, judge_call
 from computer_use.desktop import DesktopPort
 from computer_use.interception import refer_to_human
+from computer_use.pace import confirmation_reason
 
 
 def decide(desktop: DesktopPort, payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -26,7 +29,11 @@ def decide(desktop: DesktopPort, payload: Mapping[str, Any]) -> dict[str, Any] |
     arguments = payload.get("tool_input")
     if not isinstance(arguments, Mapping):
         arguments = {}
+    if tool in INPUT_TOOLS and desktop.read_pace().stopped:
+        return None
     verdict = judge_call(tool, arguments)
+    if (reason := confirmation_reason(desktop, tool)) is not None:
+        verdict = verdict | Verdict((reason,))
     if not verdict.dangerous:
         return None
     refer_to_human(desktop, tool, arguments)

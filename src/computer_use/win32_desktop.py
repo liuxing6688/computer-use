@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import os
 import secrets
+import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Collection, Sequence
+from typing import Collection, Sequence, TypeGuard, TypeVar
 
+import win32clipboard
 import win32con
 import win32gui
 import win32process
@@ -21,7 +26,22 @@ from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
 from winrt.windows.media.ocr import OcrEngine
 from winrt.windows.storage.streams import DataWriter
 
-from computer_use.desktop import Capture, Rect, TextUnreadable, Window, WindowUnavailable
+from computer_use.desktop import (
+    Capture,
+    Clipboard,
+    ClipboardUnavailable,
+    ForegroundError,
+    InjectionError,
+    PaceState,
+    Rect,
+    TextUnreadable,
+    Window,
+    WindowUnavailable,
+)
+
+_T = TypeVar("_T")
+_ClipData = str | bytes | tuple[str, ...]
+_ClipFormat = tuple[int, _ClipData]
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
@@ -64,6 +84,12 @@ _user32.SetCursorPos.restype = wintypes.BOOL
 _user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
 _user32.GetCursorPos.restype = wintypes.BOOL
 _user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
+_user32.AttachThreadInput.restype = wintypes.BOOL
+_user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
+_user32.keybd_event.argtypes = (wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t)
+_user32.keybd_event.restype = None
+_kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+_kernel32.GetCurrentThreadId.argtypes = ()
 
 
 class _MOUSEINPUT(ctypes.Structure):
@@ -77,14 +103,42 @@ class _MOUSEINPUT(ctypes.Structure):
     )
 
 
-class _INPUT(ctypes.Structure):
-    """`INPUT` 只取鼠标一支；`MOUSEINPUT` 是联合体里最大的成员，结构体大小不变。"""
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = (
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    )
 
-    _fields_ = (("type", wintypes.DWORD), ("mi", _MOUSEINPUT))
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = (("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT))
+
+
+class _INPUT(ctypes.Structure):
+    """`MOUSEINPUT` 是联合体里最大的成员，键盘事件放在同一块里。"""
+
+    _fields_ = (("type", wintypes.DWORD), ("u", _INPUTUNION))
 
 
 _user32.SendInput.restype = wintypes.UINT
 _user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int)
+_user32.RegisterHotKey.restype = wintypes.BOOL
+_user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)
+_user32.GetMessageW.restype = ctypes.c_int
+_user32.GetMessageW.argtypes = (
+    ctypes.POINTER(wintypes.MSG),
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.UINT,
+)
+
+_MOD_CONTROL = 0x0002
+_VK_CANCEL = 0x03
+_WM_HOTKEY = 0x0312
+_STOP_HOTKEY_ID = 1
 
 
 class _PROCESSENTRY32W(ctypes.Structure):
@@ -111,8 +165,15 @@ _kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(_PROCESSENT
 
 _GA_ROOT = 2
 _INPUT_MOUSE = 0
+_INPUT_KEYBOARD = 1
 _MOUSEEVENTF_LEFTDOWN = 0x0002
 _MOUSEEVENTF_LEFTUP = 0x0004
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_UNICODE = 0x0004
+_VK_CONTROL = 0x11
+_VK_V = 0x56
+# Ctrl+V 送出后留给前台窗口读剪贴板的时间，读完调用方才能把原内容放回去。
+_PASTE_SETTLE_SECONDS = 0.2
 _TH32CS_SNAPPROCESS = 0x2
 _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
@@ -206,12 +267,64 @@ class Win32Desktop:
         _user32.GetCursorPos(ctypes.byref(cursor))
         if (cursor.x, cursor.y) != (x, y):
             raise OSError(f"光标没能移到 ({x}, {y})，停在了 ({cursor.x}, {cursor.y})")
-        inputs = (_INPUT * 2)(
-            _INPUT(type=_INPUT_MOUSE, mi=_MOUSEINPUT(dwFlags=_MOUSEEVENTF_LEFTDOWN)),
-            _INPUT(type=_INPUT_MOUSE, mi=_MOUSEINPUT(dwFlags=_MOUSEEVENTF_LEFTUP)),
-        )
-        if _user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT)) != len(inputs):
-            raise ctypes.WinError(ctypes.get_last_error())
+        _send(_mouse(_MOUSEEVENTF_LEFTDOWN), _mouse(_MOUSEEVENTF_LEFTUP))
+
+    def focus(self, handle: int) -> None:
+        if not win32gui.IsWindow(handle):
+            raise ForegroundError(f"窗口 {handle} 已经不在了")
+        if win32gui.IsIconic(handle):
+            win32gui.ShowWindow(handle, win32con.SW_RESTORE)
+        _force_foreground(handle)
+        if win32gui.GetForegroundWindow() != handle:
+            raise ForegroundError(f"窗口 {handle} 没能来到前台")
+
+    def read_clipboard(self) -> Clipboard:
+        try:
+            return Clipboard(_read_formats())
+        except OSError as error:
+            raise ClipboardUnavailable("剪贴板读不出来") from error
+
+    def set_clipboard_text(self, text: str) -> None:
+        previous = self.read_clipboard()
+        try:
+            _replace_clipboard(((win32con.CF_UNICODETEXT, text),))
+        except ClipboardUnavailable:
+            try:
+                self.restore_clipboard(previous)
+            except ClipboardUnavailable:
+                raise ClipboardUnavailable("文本写不进剪贴板，而且原内容没能放回去") from None
+            raise
+
+    def restore_clipboard(self, snapshot: Clipboard) -> None:
+        _replace_clipboard(_as_formats(snapshot.content))
+
+    def paste(self) -> None:
+        """向当前前台窗口粘贴。按键送出后稍等，前台窗口才来得及把剪贴板读走。"""
+
+        try:
+            _send(
+                _key(_VK_CONTROL, 0),
+                _key(_VK_V, 0),
+                _key(_VK_V, _KEYEVENTF_KEYUP),
+                _key(_VK_CONTROL, _KEYEVENTF_KEYUP),
+            )
+        except OSError as error:
+            raise ClipboardUnavailable("粘贴没能送进前台窗口") from error
+        time.sleep(_PASTE_SETTLE_SECONDS)
+
+    def type_character(self, character: str) -> None:
+        if len(character) != 1:
+            raise InjectionError("一次只能注入一个字符")
+        try:
+            events: list[_INPUT] = []
+            encoded = character.encode("utf-16-le")
+            for index in range(0, len(encoded), 2):
+                unit = int.from_bytes(encoded[index : index + 2], "little")
+                events.append(_unicode_key(unit, key_up=False))
+                events.append(_unicode_key(unit, key_up=True))
+            _send(*events)
+        except OSError as error:
+            raise InjectionError(f"字符 {character!r} 没能送进前台窗口") from error
 
     def append_log(self, line: str) -> None:
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -244,6 +357,195 @@ class Win32Desktop:
             return datetime.fromisoformat(taken.read_text(encoding="utf-8"))
         finally:
             taken.unlink()
+
+    def read_pace(self) -> PaceState:
+        try:
+            data = json.loads((self._data_dir / "pace.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return PaceState()
+        return PaceState(streak=int(data["streak"]), stopped=bool(data["stopped"]))
+
+    def write_pace(self, state: PaceState) -> None:
+        """先写临时文件再替换，hook 那边不会读到写了一半的内容。"""
+
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        path = self._data_dir / "pace.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps({"streak": state.streak, "stopped": state.stopped}),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
+        _StopHotkey.install(on_stop)
+
+
+class _StopHotkey:
+    """进程里一条消息循环，接 Ctrl+Break。重复注册只换回调，热键只占一个。"""
+
+    callback: Callable[[], None] | None = None
+    _thread: threading.Thread | None = None
+    _ready = threading.Event()
+    _error: BaseException | None = None
+
+    @classmethod
+    def install(cls, on_stop: Callable[[], None]) -> None:
+        cls.callback = on_stop
+        if cls._thread is not None:
+            return
+        cls._thread = threading.Thread(target=cls._loop, name="computer-use-stop", daemon=True)
+        cls._thread.start()
+        if not cls._ready.wait(5):
+            raise TimeoutError("急停热键没有在 5 秒内注册上")
+        if cls._error is not None:
+            raise cls._error
+
+    @classmethod
+    def _loop(cls) -> None:
+        if not _user32.RegisterHotKey(None, _STOP_HOTKEY_ID, _MOD_CONTROL, _VK_CANCEL):
+            cls._error = ctypes.WinError(ctypes.get_last_error())
+            cls._ready.set()
+            return
+        cls._ready.set()
+        message = wintypes.MSG()
+        while _user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+            if message.message == _WM_HOTKEY and cls.callback is not None:
+                cls.callback()
+
+
+def _send(*inputs: _INPUT) -> None:
+    array = (_INPUT * len(inputs))(*inputs)
+    if _user32.SendInput(len(array), array, ctypes.sizeof(_INPUT)) != len(array):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _mouse(flags: int) -> _INPUT:
+    return _INPUT(type=_INPUT_MOUSE, u=_INPUTUNION(mi=_MOUSEINPUT(dwFlags=flags)))
+
+
+def _key(virtual_key: int, flags: int) -> _INPUT:
+    return _INPUT(
+        type=_INPUT_KEYBOARD,
+        u=_INPUTUNION(ki=_KEYBDINPUT(wVk=virtual_key, dwFlags=flags)),
+    )
+
+
+def _unicode_key(unit: int, *, key_up: bool) -> _INPUT:
+    flags = _KEYEVENTF_UNICODE | (_KEYEVENTF_KEYUP if key_up else 0)
+    return _INPUT(
+        type=_INPUT_KEYBOARD,
+        u=_INPUTUNION(ki=_KEYBDINPUT(wScan=unit, dwFlags=flags)),
+    )
+
+
+def _force_foreground(handle: int) -> None:
+    """把 `handle` 带到前台。后台进程直接 `SetForegroundWindow` 会被系统拒绝，先挂到前台线程上。"""
+
+    if win32gui.GetForegroundWindow() == handle:
+        return
+    current = _kernel32.GetCurrentThreadId()
+    target_thread, _ = win32process.GetWindowThreadProcessId(handle)
+    foreground = win32gui.GetForegroundWindow()
+    foreground_thread = 0
+    if foreground:
+        foreground_thread, _ = win32process.GetWindowThreadProcessId(foreground)
+
+    def attach(thread: int, on: bool) -> bool:
+        if not thread or thread == current:
+            return False
+        return bool(_user32.AttachThreadInput(current, thread, on))
+
+    attached_target = attach(target_thread, True)
+    attached_foreground = attach(foreground_thread, True)
+    try:
+        win32gui.ShowWindow(handle, win32con.SW_SHOW)
+        win32gui.SetForegroundWindow(handle)
+        win32gui.BringWindowToTop(handle)
+    finally:
+        if attached_foreground:
+            attach(foreground_thread, False)
+        if attached_target:
+            attach(target_thread, False)
+    if win32gui.GetForegroundWindow() == handle:
+        return
+    # 空按键让系统把「最近收到输入」算到本进程头上，否则后台进程带不来前台。
+    _user32.keybd_event(0, 0, 0, 0)
+    win32gui.SetForegroundWindow(handle)
+    win32gui.BringWindowToTop(handle)
+
+
+def _with_clipboard(body: Callable[[], _T]) -> _T:
+    last: OSError | None = None
+    for _ in range(10):
+        try:
+            win32clipboard.OpenClipboard(None)
+        except OSError as error:
+            last = error
+            time.sleep(0.02)
+            continue
+        try:
+            return body()
+        finally:
+            win32clipboard.CloseClipboard()  # type: ignore[no-untyped-call]
+    raise ClipboardUnavailable("剪贴板正被别的程序占用") from last
+
+
+def _read_formats() -> tuple[_ClipFormat, ...]:
+    def read() -> tuple[_ClipFormat, ...]:
+        found: list[_ClipFormat] = []
+        fmt = 0
+        while True:
+            fmt = int(win32clipboard.EnumClipboardFormats(fmt))
+            if not fmt:
+                break
+            try:
+                data: object = win32clipboard.GetClipboardData(fmt)
+            except OSError:
+                continue
+            if isinstance(data, str):
+                found.append((fmt, data))
+            elif isinstance(data, bytes):
+                found.append((fmt, data))
+            elif isinstance(data, bytearray | memoryview):
+                found.append((fmt, bytes(data)))
+            elif isinstance(data, tuple) and all(isinstance(part, str) for part in data):
+                found.append((fmt, tuple(part for part in data)))
+        return tuple(found)
+
+    return _with_clipboard(read)
+
+
+def _replace_clipboard(formats: tuple[_ClipFormat, ...]) -> None:
+    def write() -> None:
+        win32clipboard.EmptyClipboard()  # type: ignore[no-untyped-call]
+        for fmt, data in formats:
+            win32clipboard.SetClipboardData(fmt, data)  # type: ignore[no-untyped-call]
+
+    try:
+        _with_clipboard(write)
+    except OSError as error:
+        raise ClipboardUnavailable("剪贴板写不进去") from error
+
+
+def _as_formats(content: object) -> tuple[_ClipFormat, ...]:
+    if not isinstance(content, tuple):
+        raise ClipboardUnavailable("剪贴板快照无法恢复")
+    formats: list[_ClipFormat] = []
+    for item in content:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ClipboardUnavailable("剪贴板快照无法恢复")
+        fmt, data = item
+        if not isinstance(fmt, int) or not _is_clip_data(data):
+            raise ClipboardUnavailable("剪贴板快照无法恢复")
+        formats.append((fmt, data))
+    return tuple(formats)
+
+
+def _is_clip_data(data: object) -> TypeGuard[_ClipData]:
+    if isinstance(data, (str, bytes)):
+        return True
+    return isinstance(data, tuple) and all(isinstance(part, str) for part in data)
 
 
 async def _recognize(image: Image.Image) -> str:

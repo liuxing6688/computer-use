@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from computer_use.desktop import DesktopPort, Rect, TextUnreadable
 from computer_use.observation import Screenshot
 
-INPUT_TOOLS = frozenset({"click"})
+INPUT_TOOLS = frozenset({"click", "type_text"})
 """须自报危险性的输入工具。"""
 
 _CJK_WORDS = (

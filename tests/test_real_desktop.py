@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
+import win32clipboard
 import win32con
 import win32gui
 from fastmcp import Client
@@ -217,6 +218,74 @@ def test_点在写着高危词的地方_真实_OCR_拦下未自报的点击_经_
     assert list((tmp_path / "computer-use" / "tickets").iterdir()) == []
 
 
+def test_中文打进记事本_原来的剪贴板内容被放回(
+    notepad: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    desktop = Win32Desktop(data_dir=tmp_path)
+    saved = desktop.read_clipboard()
+    marker = "用户原来复制的"
+    custom = win32clipboard.RegisterClipboardFormat("computer-use-type-text-test")
+    try:
+        _put_clipboard(marker, custom, b"opaque")
+        window = _await_notepad(lambda: list_windows(desktop))
+
+        async def call() -> dict[str, Any]:
+            async with Client(create_server(desktop)) as client:
+                await client.call_tool("declare_scope", {"handles": [window["handle"]]})
+                observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+                meta = observed.data
+                size = meta["size"]
+                await client.call_tool(
+                    "click",
+                    {
+                        "screenshot_id": meta["screenshot_id"],
+                        "x": size["width"] // 2,
+                        "y": size["height"] // 2,
+                        "intent": "点记事本的编辑区",
+                        "dangerous": False,
+                    },
+                )
+                typed = await client.call_tool(
+                    "type_text",
+                    {
+                        "screenshot_id": meta["screenshot_id"],
+                        "text": "你好",
+                        "intent": "在记事本里输入中文",
+                        "dangerous": False,
+                    },
+                )
+                return dict(typed.data)
+
+        result = asyncio.run(call())
+
+        edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
+        assert edit, "没找到记事本的编辑框"
+        assert win32gui.GetWindowText(edit) == "你好"
+        assert result["tier"] == "clipboard"
+        assert result["clipboard_used"] is True
+        assert result["window"]["handle"] == window["handle"]
+        assert _clipboard_unicode() == marker
+        assert _clipboard_bytes(custom) == b"opaque"
+        assert win32gui.GetForegroundWindow() == window["handle"]
+    finally:
+        desktop.restore_clipboard(saved)
+
+
+def test_逐字符注入能把中文打进记事本(notepad: subprocess.Popen[bytes]) -> None:
+    desktop = Win32Desktop()
+    window = _await_notepad(lambda: list_windows(desktop))
+    edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
+    assert edit, "没找到记事本的编辑框"
+    win32gui.SetWindowText(edit, "")  # type: ignore[call-arg]
+    desktop.focus(window["handle"])
+
+    for character in "你好":
+        desktop.type_character(character)
+
+    assert win32gui.GetWindowText(edit) == "你好"
+    assert win32gui.GetForegroundWindow() == window["handle"]
+
+
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:
     """Claude Code 就是这样连上来的：拉起一个子进程，走 stdio 说 MCP。"""
 
@@ -232,6 +301,8 @@ def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[
                 "get_scope",
                 "list_windows",
                 "observe_window",
+                "resume",
+                "type_text",
                 "zoom",
             ]
             result = await client.call_tool("list_windows", {})
@@ -240,6 +311,38 @@ def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[
     window = _await_notepad(lambda: asyncio.run(call()))
 
     assert "记事本" in window["title"] or "Notepad" in window["title"]
+
+
+def _put_clipboard(text: str, custom_format: int, custom: bytes) -> None:
+    win32clipboard.OpenClipboard(None)
+    try:
+        win32clipboard.EmptyClipboard()  # type: ignore[no-untyped-call]
+        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)  # type: ignore[no-untyped-call]
+        win32clipboard.SetClipboardData(custom_format, custom)  # type: ignore[no-untyped-call]
+    finally:
+        win32clipboard.CloseClipboard()  # type: ignore[no-untyped-call]
+
+
+def _clipboard_unicode() -> str | None:
+    win32clipboard.OpenClipboard(None)
+    try:
+        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return None
+        data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+    finally:
+        win32clipboard.CloseClipboard()  # type: ignore[no-untyped-call]
+    return data if isinstance(data, str) else None
+
+
+def _clipboard_bytes(fmt: int) -> bytes | None:
+    win32clipboard.OpenClipboard(None)
+    try:
+        if not win32clipboard.IsClipboardFormatAvailable(fmt):
+            return None
+        data = win32clipboard.GetClipboardData(fmt)
+    finally:
+        win32clipboard.CloseClipboard()  # type: ignore[no-untyped-call]
+    return data if isinstance(data, bytes) else None
 
 
 def _dpi_unaware_view(handle: int) -> tuple[float, int]:

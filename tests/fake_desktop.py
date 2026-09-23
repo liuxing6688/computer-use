@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Collection, Mapping, Sequence
+from typing import Any, Callable, Collection, Mapping, Sequence
 
 from PIL import Image
 
-from computer_use.desktop import Capture, Rect, TextUnreadable, Window, WindowUnavailable
+from computer_use.desktop import (
+    Capture,
+    Clipboard,
+    ClipboardUnavailable,
+    ForegroundError,
+    InjectionError,
+    PaceState,
+    Rect,
+    TextUnreadable,
+    Window,
+    WindowUnavailable,
+)
 
 
 class FakeDesktop:
@@ -18,7 +29,7 @@ class FakeDesktop:
     `gone` 中的窗口仍会被枚举出来，但截图时已经关掉了。`agent_processes` 是 Agent 自身所在的进程。
     `texts` 是屏幕上写着的文字及其屏幕矩形，文字识别读出中心落在识别区域内的那些；
     `unreadable` 为真时文字识别无法进行。
-    注入的点击、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
+    注入的点击、文本、剪贴板、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
     """
 
     def __init__(
@@ -43,6 +54,18 @@ class FakeDesktop:
         self.log_lines: list[str] = []
         self.evidence: dict[str, bytes] = {}
         self.tickets: dict[str, datetime] = {}
+        self._pace_state = PaceState()
+        self.stop_hotkey: Callable[[], None] | None = None
+        self.clipboard: object = ""
+        self.pasted: list[object] = []
+        self.characters: list[str] = []
+        self.trace: list[tuple[object, ...]] = []
+        self.focus_fails = False
+        self.clipboard_read_fails = False
+        self.clipboard_write_fails = False
+        self.clipboard_restore_fails = False
+        self.paste_fails = False
+        self.unicode_fails = False
 
     def list_windows(self) -> Sequence[Window]:
         return tuple(self._windows)
@@ -92,6 +115,41 @@ class FakeDesktop:
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
 
+    def focus(self, handle: int) -> None:
+        self.trace.append(("focus", handle))
+        if self.focus_fails:
+            raise ForegroundError(f"窗口 {handle} 没能来到前台")
+
+    def read_clipboard(self) -> Clipboard:
+        self.trace.append(("read_clipboard",))
+        if self.clipboard_read_fails:
+            raise ClipboardUnavailable("剪贴板读不出来")
+        return Clipboard(self.clipboard)
+
+    def set_clipboard_text(self, text: str) -> None:
+        self.trace.append(("set_clipboard_text", text))
+        if self.clipboard_write_fails:
+            raise ClipboardUnavailable("文本写不进剪贴板")
+        self.clipboard = text
+
+    def restore_clipboard(self, snapshot: Clipboard) -> None:
+        self.trace.append(("restore_clipboard",))
+        if self.clipboard_restore_fails:
+            raise ClipboardUnavailable("原剪贴板内容没能恢复")
+        self.clipboard = snapshot.content
+
+    def paste(self) -> None:
+        self.trace.append(("paste",))
+        if self.paste_fails:
+            raise ClipboardUnavailable("粘贴没能送进前台窗口")
+        self.pasted.append(self.clipboard)
+
+    def type_character(self, character: str) -> None:
+        self.trace.append(("type_character", character))
+        if self.unicode_fails:
+            raise InjectionError(f"字符 {character!r} 没能送进前台窗口")
+        self.characters.append(character)
+
     def append_log(self, line: str) -> None:
         assert "\n" not in line, "一条日志须是一行"
         self.log_lines.append(line)
@@ -106,6 +164,20 @@ class FakeDesktop:
 
     def take_ticket(self, key: str) -> datetime | None:
         return self.tickets.pop(key, None)
+
+    def read_pace(self) -> PaceState:
+        return self._pace_state
+
+    def write_pace(self, state: PaceState) -> None:
+        self._pace_state = state
+
+    def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
+        self.stop_hotkey = on_stop
+
+    def press_stop_hotkey(self) -> None:
+        if self.stop_hotkey is None:
+            raise AssertionError("还没有注册急停热键")
+        self.stop_hotkey()
 
     def action_log(self) -> list[dict[str, Any]]:
         """动作日志逐行解析后的记录。"""

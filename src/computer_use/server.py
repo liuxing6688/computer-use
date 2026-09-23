@@ -14,22 +14,35 @@ from mcp.types import TextContent
 
 from computer_use import tools
 from computer_use.action_log import ActionLog, Intercepted
-from computer_use.desktop import DesktopPort, Rect
+from computer_use.desktop import (
+    ClipboardUnavailable,
+    DesktopPort,
+    ForegroundError,
+    InjectionError,
+    Rect,
+)
 from computer_use.observation import ObservationError, Screenshots
+from computer_use.pace import INPUT_BUDGET, INPUT_INTERVAL, Pace
 from computer_use.scope import ScopeError, TaskScope
 
 T = TypeVar("T")
 
-INSTRUCTIONS = """\
+INSTRUCTIONS = f"""\
 操控本机 Windows 桌面。
 窗口一律以 `handle` 指称；`list_windows` 的矩形为屏幕物理像素。
 观察与放大返回的截图各带一个 `screenshot_id`；指称截图上的位置时，一律用那张截图的像素坐标，
 换算到屏幕由服务端完成。
-动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击落在任务作用域之外、
+动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击或文本输入落在任务作用域之外、
 或落在高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时一律被拒绝。
 点击前服务端会重新采集落点附近，与那张截图比对；界面在此期间变了就拒绝执行，此时请重新观察。
+输入文本用 `type_text`，打进目标窗口当前的焦点输入框。中文优先走剪贴板粘贴，原剪贴板内容会在事后恢复；
+粘贴走不通时改为逐字符注入。返回里写明实际走了哪一档，以及是否占用过剪贴板。
 输入工具须如实自报危险性（`dangerous`）。判为危险的动作要由人在 Claude Code 里确认；
 被服务端以落点附近的高危词拦下时，如确需执行，把 `dangerous` 设为 true 重新调用。
+相邻输入动作至少隔 {INPUT_INTERVAL:g} 秒。连续输入满 {INPUT_BUDGET} 次后，下一次须原样重新调用，由人确认才能继续；
+把 `dangerous` 改成 true 不能代替这次确认。
+急停热键是 Ctrl+Break：按下后正在等待的输入被取消，之后所有输入工具拒绝，直到调用 `resume` 并经人确认。
+只读工具在急停后仍可用。
 """
 
 
@@ -40,6 +53,8 @@ def create_server(desktop: DesktopPort) -> FastMCP:
     screenshots = Screenshots()
     scope = TaskScope()
     log = ActionLog(desktop)
+    pace = Pace(desktop)
+    desktop.register_stop_hotkey(pace.stop)
 
     @mcp.tool
     def list_windows() -> list[dict[str, Any]]:
@@ -153,8 +168,61 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 evidence_window=window,
                 action=lambda: tools.click(
                     desktop, screenshots, scope, screenshot_id, x, y,
-                    intent=intent, dangerous=dangerous,
+                    intent=intent, dangerous=dangerous, pace=pace,
                 ),
+            )
+        )
+
+    @mcp.tool
+    def type_text(screenshot_id: str, text: str, intent: str, dangerous: bool) -> dict[str, Any]:
+        """把文本打进某张截图所属窗口当前的焦点输入框，可以包含中文。
+
+        先把该窗口带到前台。优先经剪贴板粘贴：先保存原剪贴板内容，粘贴之后恢复，
+        调用方原来复制的内容不会被留下。粘贴走不通（剪贴板打不开，或按键送不进去）时，
+        改为逐字符 Unicode 注入。
+        返回实际落到的窗口、`tier` 与 `clipboard_used`。`tier` 为 `clipboard` 表示走了剪贴板粘贴，
+        为 `unicode` 表示降级成了逐字符注入。`clipboard_used` 为真表示这段文本曾经写入剪贴板。
+        `intent` 用一句话说明这次输入要做什么，记入动作日志。文本本身不写入日志。
+        `dangerous` 自报这次输入是否危险：后果难以撤销或后果离开本机即为危险。
+        判为危险的输入须由人在 Claude Code 中确认后才会执行。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="type_text",
+                target={"window": window, "screenshot_id": screenshot_id},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=window,
+                action=lambda: tools.type_text(
+                    desktop,
+                    screenshots,
+                    scope,
+                    screenshot_id,
+                    text,
+                    intent=intent,
+                    dangerous=dangerous,
+                    pace=pace,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def resume() -> str:
+        """解除急停，使输入工具重新可用。
+
+        未急停时无事发生。急停中须由人在 Claude Code 里确认后才会恢复。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="resume",
+                target={},
+                intent=None,
+                dangerous=None,
+                evidence_window=None,
+                action=lambda: tools.resume(desktop, pace),
             )
         )
 
@@ -171,11 +239,18 @@ def _window_of(screenshots: Screenshots, screenshot_id: str) -> int | None:
 
 
 def _refusal_as_tool_error(call: Callable[[], T]) -> T:
-    """把核心的拒绝与拦截原样转成回给模型的工具错误。"""
+    """把核心的拒绝、拦截与输入失败原样转成回给模型的工具错误。"""
 
     try:
         return call()
-    except (ObservationError, ScopeError, Intercepted) as error:
+    except (
+        ObservationError,
+        ScopeError,
+        Intercepted,
+        ForegroundError,
+        ClipboardUnavailable,
+        InjectionError,
+    ) as error:
         raise ToolError(str(error)) from error
 
 

@@ -12,6 +12,7 @@ from typing import Any, Sequence
 from computer_use import actions, observation
 from computer_use.desktop import DesktopPort, Rect, Window
 from computer_use.observation import Screenshot, Screenshots
+from computer_use.pace import Pace
 from computer_use.scope import TaskScope
 from computer_use.windows import operable_windows
 
@@ -69,16 +70,65 @@ def click(
     *,
     intent: str,
     dangerous: bool,
+    pace: Pace | None = None,
 ) -> dict[str, Any]:
     """输入工具：在某张截图的像素 `(x, y)` 处单击，返回实际落点。"""
 
     landed = actions.click(
-        desktop, screenshots, scope, screenshot_id, x, y, intent=intent, dangerous=dangerous
+        desktop,
+        screenshots,
+        scope,
+        screenshot_id,
+        x,
+        y,
+        intent=intent,
+        dangerous=dangerous,
+        pace=pace,
     )
     return {
         "window": _as_identity(landed.window),
         "screen_point": {"x": landed.x, "y": landed.y},
     }
+
+
+def type_text(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    text: str,
+    *,
+    intent: str,
+    dangerous: bool,
+    pace: Pace | None = None,
+) -> dict[str, Any]:
+    """输入工具：把文本打进某张截图所属窗口的焦点输入框。
+
+    `tier` 是实际走通的那一档：`clipboard` 为剪贴板粘贴，`unicode` 为逐字符注入。
+    `clipboard_used` 为真表示这段文本曾经写入剪贴板（调用结束时原内容已恢复，除非恢复本身失败）。
+    """
+
+    typed = actions.type_text(
+        desktop,
+        screenshots,
+        scope,
+        screenshot_id,
+        text,
+        intent=intent,
+        dangerous=dangerous,
+        pace=pace,
+    )
+    return {
+        "window": _as_identity(typed.window),
+        "tier": typed.tier,
+        "clipboard_used": typed.clipboard_used,
+    }
+
+
+def resume(desktop: DesktopPort, pace: Pace) -> str:
+    """显式恢复：解除急停，使输入工具重新可用。未急停时无事发生。"""
+
+    return actions.resume(desktop, pace)
 
 
 def _as_identity(window: Window) -> dict[str, Any]:

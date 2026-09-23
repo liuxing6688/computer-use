@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Collection, Protocol, Sequence
+from typing import Callable, Collection, Protocol, Sequence
 
 from PIL.Image import Image
 
@@ -64,6 +64,36 @@ class TextUnreadable(Exception):
     """文字识别无法进行，例如系统里没有可用的识别语言。"""
 
 
+class ForegroundError(Exception):
+    """目标窗口没能来到前台。"""
+
+
+class ClipboardUnavailable(Exception):
+    """剪贴板读、写、粘贴或恢复没能完成。"""
+
+
+class InjectionError(Exception):
+    """逐字符注入没能把字符送进前台窗口。"""
+
+
+@dataclass(frozen=True)
+class Clipboard:
+    """一份剪贴板内容。核心不解释 `content`，只在保存与恢复之间原样交还。"""
+
+    content: object
+
+
+@dataclass(frozen=True)
+class PaceState:
+    """限速与急停里、服务端和 hook 都要看见的那一部分。
+
+    间隔的计时只活在服务端进程内，不在这里。
+    """
+
+    streak: int = 0
+    stopped: bool = False
+
+
 class DesktopPort(Protocol):
     """桌面能提供的原始事实。这里只做采集，不做判定。"""
 
@@ -97,6 +127,30 @@ class DesktopPort(Protocol):
         """在屏幕物理像素 `(x, y)` 处单击鼠标左键。"""
         ...
 
+    def focus(self, handle: int) -> None:
+        """把窗口带到前台，使随后的键盘输入落进它。做不到时抛 `ForegroundError`。"""
+        ...
+
+    def read_clipboard(self) -> Clipboard:
+        """当前剪贴板内容的快照。读不到时抛 `ClipboardUnavailable`。"""
+        ...
+
+    def set_clipboard_text(self, text: str) -> None:
+        """用一段文本替换剪贴板内容。写不进去时抛 `ClipboardUnavailable`，剪贴板保持原样。"""
+        ...
+
+    def restore_clipboard(self, snapshot: Clipboard) -> None:
+        """把剪贴板放回 `read_clipboard` 给出的快照。放不回去时抛 `ClipboardUnavailable`。"""
+        ...
+
+    def paste(self) -> None:
+        """向当前前台窗口粘贴（Ctrl+V）。送不出去时抛 `ClipboardUnavailable`。"""
+        ...
+
+    def type_character(self, character: str) -> None:
+        """向当前前台窗口注入一个 Unicode 字符。送不出去时抛 `InjectionError`。"""
+        ...
+
     def append_log(self, line: str) -> None:
         """把一行记录追加到动作日志末尾。`line` 不含换行。"""
         ...
@@ -111,4 +165,16 @@ class DesktopPort(Protocol):
 
     def take_ticket(self, key: str) -> datetime | None:
         """取走一张裁决凭据，返回它的签发时刻；没有时为 `None`。同一张凭据只能被取走一次。"""
+        ...
+
+    def read_pace(self) -> PaceState:
+        """连续输入次数，以及是否正处于急停。还没有记录时连续次数为 0、未急停。"""
+        ...
+
+    def write_pace(self, state: PaceState) -> None:
+        """记下连续输入次数与急停。服务端写，hook 读，两边是不同进程。"""
+        ...
+
+    def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
+        """注册全局急停热键 Ctrl+Break。按下时调用 `on_stop`。重复注册只更换回调。"""
         ...

@@ -72,6 +72,38 @@ class TaskScope:
             raise Intercepted(f"落点 ({x}, {y}) 处是{_describe(hit)}，在任务作用域之外")
         return hit
 
+    def admit_window(self, desktop: DesktopPort, window: Window) -> Window:
+        """文本输入的目标：截图所属的那个窗口，须仍在，且在作用域内、不是高危窗口。
+
+        文本输入没有落点，目标就是这扇窗口本身。它弹出的对话框也算作用域内。
+        """
+
+        if not self._windows:
+            raise Intercepted(
+                "尚未声明任务作用域，任何窗口都在作用域之外；请先声明本次任务涉及的窗口"
+            )
+        all_windows = {w.handle: w for w in desktop.list_windows()}
+        current = all_windows.get(window.handle)
+        if current is None:
+            raise Intercepted(f"窗口「{window.title}」（句柄 {window.handle}）已经不在了")
+        if current.process_id != window.process_id:
+            raise Intercepted(
+                f"句柄 {window.handle} 已属于{_describe(current)}，不再是截图里的那个窗口，"
+                "在任务作用域之外"
+            )
+        chain = _owner_chain(current, all_windows)
+        agent_processes = frozenset(desktop.agent_process_ids())
+        for w in chain:
+            if (risk := _high_risk(w, agent_processes)) is not None:
+                raise Intercepted(
+                    f"目标是{_describe(current)}，属于高危窗口（{risk}），"
+                    "即使在任务作用域内也一律拒绝"
+                )
+        declared = {(w.handle, w.process_id) for w in self._windows}
+        if not any((w.handle, w.process_id) in declared for w in chain):
+            raise Intercepted(f"目标是{_describe(current)}，在任务作用域之外")
+        return current
+
 
 _TERMINALS = frozenset(
     {
