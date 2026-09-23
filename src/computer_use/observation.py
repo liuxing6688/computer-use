@@ -1,4 +1,4 @@
-"""核心：观察一个窗口，并记住每张截图对应的窗口与几何。
+"""核心：观察一个窗口，记住每张截图对应的窗口与几何，并在动作之前核对截图是否仍然反映现状。
 
 纯逻辑，只依赖 `DesktopPort`。
 """
@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import PIL.Image
+import PIL.ImageChops
 from PIL.Image import Image
 
+from computer_use.action_log import Intercepted
 from computer_use.desktop import Capture, DesktopPort, Rect, Window, WindowUnavailable
 from computer_use.windows import operable_windows
 
@@ -149,6 +151,59 @@ def zoom(screenshots: Screenshots, screenshot_id: str, rect: Rect) -> Screenshot
         capture=source.capture,
         region=region,
     )
+
+
+TARGET_RADIUS = 48
+"""目标区域：落点上下左右各这么多物理像素，界面变化只在这块区域里才算数。"""
+
+PIXEL_TOLERANCE = 32
+"""一个像素任一通道的差不超过此值时视为没变，悬停一类的轻微变色不算。"""
+
+CHANGED_FRACTION = 0.02
+"""目标区域里变了的像素超过这个比例才算实质变化；闪烁的光标只占百分之一不到。"""
+
+
+def confirm_unchanged(
+    desktop: DesktopPort, screenshot: Screenshot, x: int, y: int, hit: Window
+) -> None:
+    """重新采集屏幕物理像素 `(x, y)` 周围的目标区域，与 `screenshot` 背后的原始采集比对。
+
+    `hit` 是命中测试找到的落点处的窗口。它不是截图所属的窗口（截图之后弹出的对话框挡住了落点），
+    窗口已关闭、移动或改变大小，或目标区域发生实质变化时抛 `Intercepted`。
+    """
+
+    shot = screenshot.window
+    if (hit.handle, hit.process_id) != (shot.handle, shot.process_id):
+        raise Intercepted(
+            f"落点 ({x}, {y}) 处现在是窗口「{hit.title}」（句柄 {hit.handle}），"
+            f"不是截图 {screenshot.id} 所属的窗口，请重新观察"
+        )
+    try:
+        current = desktop.capture_window(screenshot.window.handle)
+    except WindowUnavailable:
+        raise Intercepted(f"截图 {screenshot.id} 所属的窗口已经关闭，请重新观察") from None
+    original = screenshot.capture
+    if current.rect != original.rect:
+        raise Intercepted(
+            f"截图 {screenshot.id} 之后窗口已移动或改变大小，截图上的坐标不再准确，请重新观察"
+        )
+    rect = original.rect
+    box = (
+        max(x - TARGET_RADIUS, rect.left) - rect.left,
+        max(y - TARGET_RADIUS, rect.top) - rect.top,
+        min(x + TARGET_RADIUS + 1, rect.left + rect.width) - rect.left,
+        min(y + TARGET_RADIUS + 1, rect.top + rect.height) - rect.top,
+    )
+    before = original.image.convert("RGB").crop(box)
+    after = current.image.convert("RGB").crop(box)
+    red, green, blue = PIL.ImageChops.difference(before, after).split()
+    largest = PIL.ImageChops.lighter(PIL.ImageChops.lighter(red, green), blue)
+    changed = sum(largest.histogram()[PIXEL_TOLERANCE + 1 :])
+    if changed > CHANGED_FRACTION * before.width * before.height:
+        raise Intercepted(
+            f"截图 {screenshot.id} 之后落点附近的界面已经变化"
+            f"（{changed}/{before.width * before.height} 个像素不同），请重新观察"
+        )
 
 
 def observe(desktop: DesktopPort, screenshots: Screenshots, handle: int) -> Screenshot:
