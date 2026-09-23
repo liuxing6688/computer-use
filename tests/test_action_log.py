@@ -23,6 +23,7 @@ def test_成功的调用追加一条结构化日志_不留截图() -> None:
         tool="click",
         target={"window": 1, "x": 10, "y": 20},
         intent="点记事本的编辑区",
+        dangerous=False,
         evidence_window=1,
         action=lambda: "点到了",
     )
@@ -35,6 +36,7 @@ def test_成功的调用追加一条结构化日志_不留截图() -> None:
         "tool": "click",
         "target": {"window": 1, "x": 10, "y": 20},
         "intent": "点记事本的编辑区",
+        "dangerous": False,
         "verdict": "allowed",
         "outcome": "succeeded",
         "detail": None,
@@ -54,7 +56,7 @@ def test_失败的调用记下错误并留下目标窗口当时的截图() -> No
         raise RuntimeError("SendInput 失败")
 
     with pytest.raises(RuntimeError, match="SendInput 失败"):
-        log.run(tool="click", target={"window": 1}, intent="点一下", evidence_window=1, action=fail)
+        log.run(tool="click", target={"window": 1}, intent="点一下", dangerous=None, evidence_window=1, action=fail)
 
     [record] = desktop.action_log()
     assert record["verdict"] == "allowed"
@@ -76,7 +78,7 @@ def test_被拦截的调用记下拦截理由并留下目标窗口当时的截�
         raise Intercepted("落点在任务作用域之外")
 
     with pytest.raises(Intercepted):
-        log.run(tool="click", target={"window": 1}, intent="点发送", evidence_window=1, action=intercept)
+        log.run(tool="click", target={"window": 1}, intent="点发送", dangerous=None, evidence_window=1, action=intercept)
 
     [record] = desktop.action_log()
     assert record["intent"] == "点发送"
@@ -94,7 +96,7 @@ def test_目标窗口已无法截图时照常记录_原错误照常抛出() -> N
         raise RuntimeError("窗口已关闭")
 
     with pytest.raises(RuntimeError, match="窗口已关闭"):
-        log.run(tool="click", target={"window": 1}, intent=None, evidence_window=1, action=fail)
+        log.run(tool="click", target={"window": 1}, intent=None, dangerous=None, evidence_window=1, action=fail)
 
     [record] = desktop.action_log()
     assert (record["outcome"], record["evidence"]) == ("failed", None)
@@ -118,7 +120,7 @@ def test_不为不可操作的窗口留证(hidden: Window) -> None:
         raise RuntimeError("窗口不可操作")
 
     with pytest.raises(RuntimeError):
-        log.run(tool="observe_window", target={"window": 1}, intent=None, evidence_window=1, action=fail)
+        log.run(tool="observe_window", target={"window": 1}, intent=None, dangerous=None, evidence_window=1, action=fail)
 
     [record] = desktop.action_log()
     assert (record["outcome"], record["evidence"]) == ("failed", None)
@@ -137,7 +139,7 @@ def test_留证截图存不下时照常记录_原错误照常抛出() -> None:
         raise RuntimeError("SendInput 失败")
 
     with pytest.raises(RuntimeError, match="SendInput 失败"):
-        log.run(tool="click", target={"window": 1}, intent=None, evidence_window=1, action=fail)
+        log.run(tool="click", target={"window": 1}, intent=None, dangerous=None, evidence_window=1, action=fail)
 
     [record] = desktop.action_log()
     assert (record["outcome"], record["evidence"]) == ("failed", None)

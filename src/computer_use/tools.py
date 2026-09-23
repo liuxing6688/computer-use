@@ -66,10 +66,15 @@ def click(
     screenshot_id: str,
     x: int,
     y: int,
+    *,
+    intent: str,
+    dangerous: bool,
 ) -> dict[str, Any]:
     """输入工具：在某张截图的像素 `(x, y)` 处单击，返回实际落点。"""
 
-    landed = actions.click(desktop, screenshots, scope, screenshot_id, x, y)
+    landed = actions.click(
+        desktop, screenshots, scope, screenshot_id, x, y, intent=intent, dangerous=dangerous
+    )
     return {
         "window": _as_identity(landed.window),
         "screen_point": {"x": landed.x, "y": landed.y},

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import os
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -15,8 +17,11 @@ import win32gui
 import win32process
 import win32ui
 from PIL import Image
+from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
+from winrt.windows.media.ocr import OcrEngine
+from winrt.windows.storage.streams import DataWriter
 
-from computer_use.desktop import Capture, Rect, Window, WindowUnavailable
+from computer_use.desktop import Capture, Rect, TextUnreadable, Window, WindowUnavailable
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
@@ -125,7 +130,8 @@ class Win32Desktop:
     """用 Win32 API 采集真实桌面的事实。
 
     构造即声明 `PER_MONITOR_AWARE_V2`，因此窗口矩形、命中测试与鼠标坐标一律是物理像素。
-    动作日志写在 `data_dir/actions.jsonl`，留证截图存在 `data_dir/evidence/`；
+    动作日志写在 `data_dir/actions.jsonl`，留证截图存在 `data_dir/evidence/`，
+    裁决凭据存在 `data_dir/tickets/`（hook 与服务端各用一个 `Win32Desktop`，靠这个目录交接）；
     `data_dir` 缺省为 `%LOCALAPPDATA%\\computer-use`。
     """
 
@@ -168,6 +174,24 @@ class Win32Desktop:
     def agent_process_ids(self) -> Collection[int]:
         return self._agent_processes
 
+    def recognize_text(self, capture: Capture, region: Rect) -> str:
+        """用 `Windows.Media.Ocr` 把区域读一遍，每种装了的识别语言各读一遍，读数拼在一起。
+
+        按用户语言挑一种不够：英文引擎把「删除」读成乱码，中文引擎读英文却没问题，
+        界面语言与用户语言也未必一致。小区域放大一倍再读，9pt 的界面字才读得准。
+        """
+
+        image = capture.image.crop(
+            (
+                region.left - capture.rect.left,
+                region.top - capture.rect.top,
+                region.left - capture.rect.left + region.width,
+                region.top - capture.rect.top + region.height,
+            )
+        ).resize((region.width * 2, region.height * 2), Image.Resampling.LANCZOS)
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            return worker.submit(asyncio.run, _recognize(image)).result()
+
     def click(self, x: int, y: int) -> None:
         """把光标移到 `(x, y)` 再按下、抬起左键。
 
@@ -202,6 +226,49 @@ class Win32Desktop:
         with path.open("xb") as evidence:
             evidence.write(png)
         return str(path)
+
+    def put_ticket(self, key: str, issued_at: datetime) -> None:
+        directory = self._data_dir / "tickets"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / key).write_text(issued_at.isoformat(), encoding="utf-8")
+
+    def take_ticket(self, key: str) -> datetime | None:
+        """先把凭据改名再读：改名是原子的，两个调用同时来取，只有一个能拿到。"""
+
+        taken = self._data_dir / "tickets" / f"{key}.{secrets.token_hex(4)}.taken"
+        try:
+            (self._data_dir / "tickets" / key).rename(taken)
+        except FileNotFoundError:
+            return None
+        try:
+            return datetime.fromisoformat(taken.read_text(encoding="utf-8"))
+        finally:
+            taken.unlink()
+
+
+async def _recognize(image: Image.Image) -> str:
+    """`recognize_async` 是 WinRT 的异步操作，只能在事件循环里等；调用方在独立线程里跑这个循环。"""
+
+    languages = list(OcrEngine.available_recognizer_languages)
+    if not languages:
+        raise TextUnreadable("系统里没有可用的 OCR 识别语言")
+    writer = DataWriter()
+    writer.write_bytes(image.convert("RGBA").tobytes("raw", "BGRA"))
+    bitmap = SoftwareBitmap.create_copy_from_buffer(
+        writer.detach_buffer(), BitmapPixelFormat.BGRA8, image.width, image.height
+    )
+    readings = []
+    for language in languages:
+        engine = OcrEngine.try_create_from_language(language)
+        if engine is None:
+            continue
+        try:
+            readings.append((await engine.recognize_async(bitmap)).text)
+        except OSError as error:
+            raise TextUnreadable(str(error)) from error
+    if not readings:
+        raise TextUnreadable("没能创建任何一种语言的 OCR 引擎")
+    return " ".join(readings)
 
 
 def _print_window(handle: int, width: int, height: int) -> Image.Image:

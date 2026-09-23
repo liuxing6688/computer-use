@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
+import win32con
 import win32gui
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
@@ -131,6 +133,7 @@ def test_点击按截图像素坐标落在记事本上_缩放下落点一致(
                     "x": size["width"] // 2,
                     "y": size["height"] // 2,
                     "intent": "点记事本的编辑区",
+                    "dangerous": False,
                 },
             )
             return observed.data, clicked.data
@@ -156,6 +159,62 @@ def test_点击按截图像素坐标落在记事本上_缩放下落点一致(
         ("observe_window", "succeeded"),
         ("click", "succeeded"),
     ]
+
+
+def test_点在写着高危词的地方_真实_OCR_拦下未自报的点击_经_hook_交人裁决后放行(
+    notepad: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    desktop = Win32Desktop(data_dir=tmp_path / "computer-use")
+    window = _await_notepad(lambda: list_windows(desktop))
+    edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
+    assert edit, "没找到记事本的编辑框"
+    # 留出空白、把光标挪到末尾：光标竖线贴着「删」时 OCR 读不出这个字，真实按钮的文字四周都有留白。
+    # types-pywin32 把 SetWindowText 标成无参，运行时签名是 (hwnd, text)。
+    win32gui.SetWindowText(edit, "    删除    ")  # type: ignore[call-arg]
+    win32gui.SendMessage(edit, win32con.EM_SETSEL, -1, -1)
+    edit_left, edit_top, _, _ = win32gui.GetWindowRect(edit)
+
+    async def call() -> tuple[str, dict[str, Any]]:
+        async with Client(create_server(desktop)) as client:
+            await client.call_tool("declare_scope", {"handles": [window["handle"]]})
+            observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+            meta = observed.data
+            request = {
+                "screenshot_id": meta["screenshot_id"],
+                "x": round((edit_left + 50 * meta["dpi_scale"] - meta["screen_offset"]["x"]) * meta["scale"]),
+                "y": round((edit_top + 10 * meta["dpi_scale"] - meta["screen_offset"]["y"]) * meta["scale"]),
+                "intent": "点编辑区里的字",
+                "dangerous": False,
+            }
+            with pytest.raises(ToolError) as refused:
+                await client.call_tool("click", request)
+            approved = {**request, "dangerous": True}
+            hook = subprocess.run(
+                [sys.executable, "-m", "computer_use.hook"],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "mcp__computer-use__click",
+                        "tool_input": approved,
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+                env={**os.environ, "LOCALAPPDATA": str(tmp_path)},
+                capture_output=True,
+                check=True,
+            )
+            decision = json.loads(hook.stdout)["hookSpecificOutput"]
+            assert decision["permissionDecision"] == "ask"
+            assert "点编辑区里的字" in decision["permissionDecisionReason"]
+            clicked = await client.call_tool("click", approved)
+            return str(refused.value), clicked.data
+
+    refusal, clicked = asyncio.run(call())
+
+    assert "删除" in refusal
+    assert clicked["window"]["handle"] == window["handle"]
+    assert win32gui.GetForegroundWindow() == window["handle"], "点击没有落在记事本上"
+    assert list((tmp_path / "computer-use" / "tickets").iterdir()) == []
 
 
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:

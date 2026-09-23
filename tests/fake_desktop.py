@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Collection, Mapping, Sequence
 
 from PIL import Image
 
-from computer_use.desktop import Capture, Rect, Window, WindowUnavailable
+from computer_use.desktop import Capture, Rect, TextUnreadable, Window, WindowUnavailable
 
 
 class FakeDesktop:
@@ -15,7 +16,9 @@ class FakeDesktop:
 
     `windows` 的顺序即 Z 序，排在前面的在上层。没有预置截图的窗口截出来是一张与窗口等大的白图。
     `gone` 中的窗口仍会被枚举出来，但截图时已经关掉了。`agent_processes` 是 Agent 自身所在的进程。
-    注入的点击、动作日志与留证截图都留在内存里，可供断言。
+    `texts` 是屏幕上写着的文字及其屏幕矩形，文字识别读出中心落在识别区域内的那些；
+    `unreadable` 为真时文字识别无法进行。
+    注入的点击、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
     """
 
     def __init__(
@@ -26,15 +29,20 @@ class FakeDesktop:
         dpi_scale: float = 1.0,
         gone: Collection[int] = (),
         agent_processes: Collection[int] = (),
+        texts: Sequence[tuple[Rect, str]] = (),
+        unreadable: bool = False,
     ) -> None:
         self._windows = list(windows)
         self._images = dict(images or {})
         self._dpi_scale = dpi_scale
         self._gone = set(gone)
         self._agent_processes = frozenset(agent_processes)
+        self._texts = list(texts)
+        self._unreadable = unreadable
         self.clicks: list[tuple[int, int]] = []
         self.log_lines: list[str] = []
         self.evidence: dict[str, bytes] = {}
+        self.tickets: dict[str, datetime] = {}
 
     def list_windows(self) -> Sequence[Window]:
         return tuple(self._windows)
@@ -64,6 +72,23 @@ class FakeDesktop:
     def agent_process_ids(self) -> Collection[int]:
         return self._agent_processes
 
+    def recognize_text(self, capture: Capture, region: Rect) -> str:
+        if self._unreadable:
+            raise TextUnreadable("没有可用的识别语言")
+        c = capture.rect
+        assert (
+            c.left <= region.left
+            and c.top <= region.top
+            and region.left + region.width <= c.left + c.width
+            and region.top + region.height <= c.top + c.height
+        ), "识别区域须在截图之内"
+        return " ".join(
+            text
+            for rect, text in self._texts
+            if region.left <= rect.left + rect.width / 2 < region.left + region.width
+            and region.top <= rect.top + rect.height / 2 < region.top + region.height
+        )
+
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
 
@@ -75,6 +100,12 @@ class FakeDesktop:
         location = f"evidence/{len(self.evidence) + 1}.png"
         self.evidence[location] = png
         return location
+
+    def put_ticket(self, key: str, issued_at: datetime) -> None:
+        self.tickets[key] = issued_at
+
+    def take_ticket(self, key: str) -> datetime | None:
+        return self.tickets.pop(key, None)
 
     def action_log(self) -> list[dict[str, Any]]:
         """动作日志逐行解析后的记录。"""

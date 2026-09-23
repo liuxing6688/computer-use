@@ -7,10 +7,18 @@ dependencies = [
     "fastmcp>=2.0",
     "pillow>=12.3.0",
     "pywin32>=306; sys_platform == 'win32'",
+    "winrt-runtime>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-foundation>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-foundation-collections>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-globalization>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-graphics-imaging>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-media-ocr>=3.0 ; sys_platform == 'win32'",
+    "winrt-windows-storage-streams>=3.0 ; sys_platform == 'win32'",
 ]
 
 [project.scripts]
 computer-use = "computer_use.server:main"
+computer-use-hook = "computer_use.hook:main"
 
 [dependency-groups]
 dev = [

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Collection, Protocol, Sequence
 
 from PIL.Image import Image
@@ -59,6 +60,10 @@ class WindowUnavailable(Exception):
     """指称的窗口不存在，或已经无法采集。"""
 
 
+class TextUnreadable(Exception):
+    """文字识别无法进行，例如系统里没有可用的识别语言。"""
+
+
 class DesktopPort(Protocol):
     """桌面能提供的原始事实。这里只做采集，不做判定。"""
 
@@ -81,6 +86,13 @@ class DesktopPort(Protocol):
         """Agent 自身所在的进程：本服务及其各级父进程，其中之一持有 Agent 所在的窗口。"""
         ...
 
+    def recognize_text(self, capture: Capture, region: Rect) -> str:
+        """识别 `capture` 中落在屏幕区域 `region` 内的文字，不分行、不保证词序。
+
+        `region` 在 `capture.rect` 之内。识别无法进行时抛 `TextUnreadable`。
+        """
+        ...
+
     def click(self, x: int, y: int) -> None:
         """在屏幕物理像素 `(x, y)` 处单击鼠标左键。"""
         ...
@@ -91,4 +103,12 @@ class DesktopPort(Protocol):
 
     def save_evidence(self, png: bytes) -> str:
         """保存一张留证截图，返回它的位置，供日志引用。"""
+        ...
+
+    def put_ticket(self, key: str, issued_at: datetime) -> None:
+        """存下一张裁决凭据。服务端与 hook 是两个进程，凭据须存在两者都够得到的地方。"""
+        ...
+
+    def take_ticket(self, key: str) -> datetime | None:
+        """取走一张裁决凭据，返回它的签发时刻；没有时为 `None`。同一张凭据只能被取走一次。"""
         ...

@@ -28,6 +28,8 @@ INSTRUCTIONS = """\
 动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击落在任务作用域之外、
 或落在高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时一律被拒绝。
 点击前服务端会重新采集落点附近，与那张截图比对；界面在此期间变了就拒绝执行，此时请重新观察。
+输入工具须如实自报危险性（`dangerous`）。判为危险的动作要由人在 Claude Code 里确认；
+被服务端以落点附近的高危词拦下时，如确需执行，把 `dangerous` 设为 true 重新调用。
 """
 
 
@@ -50,6 +52,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
             tool="list_windows",
             target={},
             intent=None,
+            dangerous=None,
             evidence_window=None,
             action=lambda: tools.list_windows(desktop),
         )
@@ -68,6 +71,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 tool="observe_window",
                 target={"window": handle},
                 intent=None,
+                dangerous=None,
                 evidence_window=handle,
                 action=lambda: tools.observe_window(desktop, screenshots, handle),
             )
@@ -88,6 +92,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 tool="zoom",
                 target={"window": window, "screenshot_id": screenshot_id, "rect": asdict(rect)},
                 intent=None,
+                dangerous=None,
                 evidence_window=window,
                 action=lambda: tools.zoom(screenshots, screenshot_id, rect),
             )
@@ -105,6 +110,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 tool="declare_scope",
                 target={"windows": handles},
                 intent=None,
+                dangerous=None,
                 evidence_window=None,
                 action=lambda: tools.declare_scope(desktop, scope, handles),
             )
@@ -118,18 +124,22 @@ def create_server(desktop: DesktopPort) -> FastMCP:
             tool="get_scope",
             target={},
             intent=None,
+            dangerous=None,
             evidence_window=None,
             action=lambda: tools.get_scope(scope),
         )
 
     @mcp.tool
-    def click(screenshot_id: str, x: int, y: int, intent: str) -> dict[str, Any]:
+    def click(screenshot_id: str, x: int, y: int, intent: str, dangerous: bool) -> dict[str, Any]:
         """在某张截图的像素 `(x, y)` 处单击鼠标左键。
 
         坐标用那张截图的像素坐标给出，换算到屏幕由服务端完成。执行前做命中测试：
         落点处的窗口不在任务作用域内、或是高危窗口时拒绝执行并说明原因；
         截图之后窗口移动、改变大小，或落点附近的界面已经变化时也拒绝执行，须重新观察。
         `intent` 用一句话说明这次点击要做什么，记入动作日志。
+        `dangerous` 自报这次点击是否危险：后果难以撤销（删除、卸载、覆盖）或后果离开本机
+        （发送、提交、支付）即为危险。服务端还会识别落点附近的文字，含高危词同样判为危险。
+        判为危险的点击须由人在 Claude Code 中确认后才会执行；没有任何参数能跳过这一步。
         返回落点处的窗口与落点的屏幕物理像素坐标（仅供参考）。
         """
 
@@ -139,8 +149,12 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 tool="click",
                 target={"window": window, "screenshot_id": screenshot_id, "x": x, "y": y},
                 intent=intent,
+                dangerous=dangerous,
                 evidence_window=window,
-                action=lambda: tools.click(desktop, screenshots, scope, screenshot_id, x, y),
+                action=lambda: tools.click(
+                    desktop, screenshots, scope, screenshot_id, x, y,
+                    intent=intent, dangerous=dangerous,
+                ),
             )
         )
 

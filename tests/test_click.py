@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from computer_use.action_log import Intercepted
 from computer_use.desktop import Rect
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import ScopeError, TaskScope
-from computer_use.tools import click, declare_scope, get_scope, observe_window, zoom
+from computer_use import tools
+from computer_use.tools import declare_scope, get_scope, observe_window, zoom
 
 from .fake_desktop import FakeDesktop, window
+
+
+def click(
+    desktop: FakeDesktop,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+) -> dict[str, Any]:
+    """一次模型自报不危险、落点附近也没有高危词的点击；危险判定见 `test_danger.py`。"""
+
+    return tools.click(
+        desktop, screenshots, scope, screenshot_id, x, y, intent="点一下", dangerous=False
+    )
 
 
 def test_声明的任务作用域可被查询() -> None:

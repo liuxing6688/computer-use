@@ -36,12 +36,14 @@ class ActionLog:
         tool: str,
         target: Mapping[str, Any],
         intent: str | None,
+        dangerous: bool | None,
         evidence_window: int | None,
         action: Callable[[], T],
     ) -> T:
         """执行 `action` 并记下结果；`action` 抛出的异常记录后原样抛出。
 
-        `target` 原样写进日志；`evidence_window` 是留证时要截的窗口，没有时为 `None`。
+        `target` 原样写进日志；`intent` 与 `dangerous` 是模型的自报，只读工具没有，为 `None`；
+        `evidence_window` 是留证时要截的窗口，没有时为 `None`。
         """
 
         record = {
@@ -49,6 +51,7 @@ class ActionLog:
             "tool": tool,
             "target": dict(target),
             "intent": intent,
+            "dangerous": dangerous,
         }
         try:
             result = action()

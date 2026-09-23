@@ -15,6 +15,7 @@ from mcp.types import ImageContent
 from PIL import Image
 
 from computer_use.desktop import Rect
+from computer_use.hook import decide
 from computer_use.server import create_server
 
 from .fake_desktop import FakeDesktop, window
@@ -152,10 +153,12 @@ def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入�
             screenshot_id: str = observed.data["screenshot_id"]
             with pytest.raises(ToolError, match="任务作用域之外") as refused:
                 await client.call_tool(
-                    "click", {"screenshot_id": screenshot_id, "x": 10, "y": 10, "intent": "点编辑区"}
+                    "click",
+                    {"screenshot_id": screenshot_id, "x": 10, "y": 10, "intent": "点编辑区", "dangerous": False},
                 )
             clicked = await client.call_tool(
-                "click", {"screenshot_id": screenshot_id, "x": 100, "y": 100, "intent": "点编辑区"}
+                "click",
+                {"screenshot_id": screenshot_id, "x": 100, "y": 100, "intent": "点编辑区", "dangerous": False},
             )
             assert declared.data == scope.data
             return scope.data, clicked.data, screenshot_id, str(refused.value)
@@ -176,6 +179,64 @@ def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入�
     assert Image.open(io.BytesIO(desktop.evidence[refused_record["evidence"]])).size == (320, 240)
     assert (clicked_record["verdict"], clicked_record["outcome"]) == ("allowed", "succeeded")
     assert clicked_record["evidence"] is None
+
+
+def test_危险点击经由_MCP_被拦截_带_confirmed_重试也不放行_经_hook_交人裁决后才执行() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="订单管理", rect=Rect(100, 50, 320, 240))],
+        texts=[(Rect(300, 250, 40, 20), "删除")],
+    )
+
+    async def call() -> list[str]:
+        refusals = []
+        async with Client(create_server(desktop)) as client:
+            await client.call_tool("declare_scope", {"handles": [1]})
+            observed = await client.call_tool("observe_window", {"handle": 1})
+            request = {
+                "screenshot_id": observed.data["screenshot_id"],
+                "x": 220,
+                "y": 210,
+                "intent": "删除这条订单",
+                "dangerous": False,
+            }
+            for attempt in (
+                request,
+                {**request, "dangerous": True},
+                {**request, "dangerous": True, "confirmed": True},
+            ):
+                with pytest.raises(ToolError) as refused:
+                    await client.call_tool("click", attempt)
+                refusals.append(str(refused.value))
+            assert desktop.clicks == []
+            approved = {**request, "dangerous": True}
+            output = decide(desktop, _hook_payload("mcp__computer-use__click", approved))
+            assert output is not None
+            await client.call_tool("click", approved)
+        return refusals
+
+    refusals = asyncio.run(call())
+
+    assert "删除" in refusals[0]
+    assert "confirmed" in refusals[2]
+    assert desktop.clicks == [(320, 260)]
+    records = [r for r in desktop.action_log() if r["tool"] == "click"]
+    # 带 `confirmed` 的那次在参数校验时就被拒，连工具都没进，因此不在日志里。
+    assert [(r["dangerous"], r["verdict"]) for r in records] == [
+        (False, "intercepted"),
+        (True, "intercepted"),
+        (True, "allowed"),
+    ]
+
+
+def _hook_payload(tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session_id": "session-1",
+        "hook_event_name": "PreToolUse",
+        "permission_mode": "default",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_01",
+    }
 
 
 def test_声明不可操作的窗口经由_MCP_返回错误() -> None:

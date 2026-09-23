@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Sequence
+from typing import Any, Sequence
 
 import pytest
 from fastmcp import Client
@@ -15,9 +15,25 @@ from computer_use.desktop import Rect
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import TaskScope
 from computer_use.server import create_server
-from computer_use.tools import click, declare_scope, observe_window, zoom
+from computer_use import tools
+from computer_use.tools import declare_scope, observe_window, zoom
 
 from .fake_desktop import FakeDesktop, window
+
+
+def click(
+    desktop: FakeDesktop,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+) -> dict[str, Any]:
+    """一次模型自报不危险、落点附近也没有高危词的点击；危险判定见 `test_danger.py`。"""
+
+    return tools.click(
+        desktop, screenshots, scope, screenshot_id, x, y, intent="点一下", dangerous=False
+    )
 
 ROW_HEIGHT = 40
 MESSAGES = [200, 80, 260, 140, 40, 220, 120, 180, 60, 240, 100, 160]
@@ -173,7 +189,7 @@ def test_陈旧观察上的点击经由_MCP_被拒绝_记为未执行并留证()
             desktop.repaint(1, _chat_list([150, *MESSAGES]))
             arguments = {"screenshot_id": observed.data["screenshot_id"], "x": 100, "y": 140}
             with pytest.raises(ToolError, match="重新观察") as refused:
-                await client.call_tool("click", {**arguments, "intent": "点第四条消息"})
+                await client.call_tool("click", {**arguments, "intent": "点第四条消息", "dangerous": False})
             return str(refused.value)
 
     refusal = asyncio.run(call())
