@@ -2,11 +2,15 @@
 
 在 Claude Code CLI 中用自然语言操控本机 Windows 桌面的 MCP server。术语一律以 [`CONTEXT.md`](CONTEXT.md) 为准，设计决策见 [`docs/adr/`](docs/adr)。
 
-当前只有一个只读工具：
+当前只有只读工具：
 
 | 工具 | 作用 |
 | --- | --- |
 | `list_windows` | 列出桌面上可操作的窗口，含标题、进程名与屏幕矩形 |
+| `observe_window` | 截取一个窗口（不截全屏），附带截图 ID、采集时刻、缩放比、DPI 缩放与屏幕偏移 |
+| `zoom` | 把某张截图上的矩形按屏幕原尺寸裁出，附带裁剪相对窗口的偏移 |
+
+截图长边超过 1568 像素时由服务端先缩小，并在 `scale` 中如实报告；模型只需给出截图像素坐标，换算到屏幕物理像素由服务端凭截图 ID 完成。
 
 ## 环境
 
@@ -52,11 +56,12 @@ uv run mypy                      # 类型检查
 ```
 src/computer_use/
 ├── desktop.py         # DesktopPort：核心与 Windows 之间唯一的缝
-├── windows.py         # 核心：纯逻辑，只依赖 DesktopPort
+├── windows.py         # 核心：哪些窗口可操作
+├── observation.py     # 核心：观察、放大与截图 ID 的解析
 ├── tools.py           # 工具层：整理成回传给模型的形状
 ├── win32_desktop.py   # DesktopPort 的 Windows 实现（唯一 import Win32 的地方）
 └── server.py          # MCP 工具壳
 tests/fake_desktop.py  # DesktopPort 的测试替身
 ```
 
-所有与 Windows 打交道的调用都收在 `DesktopPort` 之后：核心不 import 任何 Win32/UIA/截图库，新增平台能力时只在 `desktop.py` 加方法、在 `win32_desktop.py` 与 `fake_desktop.py` 各实现一次。
+所有与 Windows 打交道的调用都收在 `DesktopPort` 之后：核心不 import 任何 Win32/UIA/截图库（Pillow 只用于裁剪、缩放与编码已采集的图像，不用于采集），新增平台能力时只在 `desktop.py` 加方法、在 `win32_desktop.py` 与 `fake_desktop.py` 各实现一次。

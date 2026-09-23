@@ -9,11 +9,15 @@ from typing import Sequence
 import win32con
 import win32gui
 import win32process
+import win32ui
+from PIL import Image
 
-from computer_use.desktop import Rect, Window
+from computer_use.desktop import Capture, Rect, Window, WindowUnavailable
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
 _DWMWA_CLOAKED = 14
+_PW_RENDERFULLCONTENT = 0x2
 _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 _EXTENDED_MAX_PATH = 32768
 
@@ -38,6 +42,10 @@ _user32.GetThreadDpiAwarenessContext.restype = wintypes.HANDLE
 _user32.GetThreadDpiAwarenessContext.argtypes = ()
 _user32.AreDpiAwarenessContextsEqual.restype = wintypes.BOOL
 _user32.AreDpiAwarenessContextsEqual.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+_user32.GetDpiForWindow.restype = wintypes.UINT
+_user32.GetDpiForWindow.argtypes = (wintypes.HWND,)
+_user32.PrintWindow.restype = wintypes.BOOL
+_user32.PrintWindow.argtypes = (wintypes.HWND, wintypes.HDC, wintypes.UINT)
 
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
 _dwmapi.DwmGetWindowAttribute.restype = ctypes.HRESULT
@@ -62,6 +70,73 @@ class Win32Desktop:
         windows: list[Window] = []
         win32gui.EnumWindows(lambda handle, _: _collect(handle, windows), None)
         return tuple(windows)
+
+    def capture_window(self, handle: int) -> Capture:
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(handle)
+            image = _print_window(handle, right - left, bottom - top)
+            frame = _extended_frame_bounds(handle)
+        except (win32gui.error, win32ui.error) as error:
+            raise WindowUnavailable(handle) from error
+        image = image.crop(
+            (
+                frame.left - left,
+                frame.top - top,
+                frame.left - left + frame.width,
+                frame.top - top + frame.height,
+            )
+        )
+        return Capture(
+            image=image, rect=frame, dpi_scale=_user32.GetDpiForWindow(handle) / 96
+        )
+
+
+def _print_window(handle: int, width: int, height: int) -> Image.Image:
+    """让窗口把自己画进一张位图，不受遮挡影响。
+
+    `PW_RENDERFULLCONTENT` 让 DWM 合成的内容（Chromium、UWP 等）也能画出来，否则只得到黑图。
+    """
+
+    window_dc = win32gui.GetWindowDC(handle)
+    source = win32ui.CreateDCFromHandle(window_dc)
+    target = source.CreateCompatibleDC()
+    bitmap = win32ui.CreateBitmap()
+    try:
+        bitmap.CreateCompatibleBitmap(source, width, height)
+        target.SelectObject(bitmap)
+        if not _user32.PrintWindow(handle, target.GetSafeHdc(), _PW_RENDERFULLCONTENT):
+            raise win32ui.error("PrintWindow 失败")
+        return Image.frombuffer(
+            "RGB", (width, height), bitmap.GetBitmapBits(True), "raw", "BGRX", 0, 1
+        )
+    finally:
+        win32gui.DeleteObject(bitmap.GetHandle())
+        target.DeleteDC()
+        source.DeleteDC()
+        win32gui.ReleaseDC(handle, window_dc)
+
+
+def _extended_frame_bounds(handle: int) -> Rect:
+    """窗口可见部分的矩形。
+
+    Windows 10 起 `GetWindowRect` 含一圈约 7 像素的不可见缩放边框，截进来是一圈黑边；
+    DWM 的扩展边框矩形去掉了它。取不到时退回窗口矩形。
+    """
+
+    rect = wintypes.RECT()
+    try:
+        _dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(handle),
+            wintypes.DWORD(_DWMWA_EXTENDED_FRAME_BOUNDS),
+            ctypes.byref(rect),
+            ctypes.sizeof(rect),
+        )
+    except OSError:
+        left, top, right, bottom = win32gui.GetWindowRect(handle)
+        return Rect(left=left, top=top, width=right - left, height=bottom - top)
+    return Rect(
+        left=rect.left, top=rect.top, width=rect.right - rect.left, height=rect.bottom - rect.top
+    )
 
 
 def _declare_dpi_awareness() -> None:
