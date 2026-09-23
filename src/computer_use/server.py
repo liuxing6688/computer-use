@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -13,15 +13,20 @@ from fastmcp.utilities.types import Image
 from mcp.types import TextContent
 
 from computer_use import tools
-from computer_use.action_log import ActionLog
+from computer_use.action_log import ActionLog, Intercepted
 from computer_use.desktop import DesktopPort, Rect
 from computer_use.observation import ObservationError, Screenshots
+from computer_use.scope import ScopeError, TaskScope
+
+T = TypeVar("T")
 
 INSTRUCTIONS = """\
-操控本机 Windows 桌面。当前只有只读工具，不会改变桌面状态。
+操控本机 Windows 桌面。
 窗口一律以 `handle` 指称；`list_windows` 的矩形为屏幕物理像素。
 观察与放大返回的截图各带一个 `screenshot_id`；指称截图上的位置时，一律用那张截图的像素坐标，
 换算到屏幕由服务端完成。
+动手之前先用 `declare_scope` 声明本次任务涉及的窗口。点击落在任务作用域之外、
+或落在高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时一律被拒绝。
 """
 
 
@@ -30,6 +35,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
     mcp = FastMCP(name="computer-use", instructions=INSTRUCTIONS)
     screenshots = Screenshots()
+    scope = TaskScope()
     log = ActionLog(desktop)
 
     @mcp.tool
@@ -86,6 +92,56 @@ def create_server(desktop: DesktopPort) -> FastMCP:
             )
         )
 
+    @mcp.tool
+    def declare_scope(handles: list[int]) -> list[dict[str, Any]]:
+        """声明本次任务涉及的窗口（任务作用域），替换原有的作用域，返回声明后的作用域。
+
+        窗口须是 `list_windows` 列出的可操作窗口；作用域内窗口弹出的对话框也算作用域内。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="declare_scope",
+                target={"windows": handles},
+                intent=None,
+                evidence_window=None,
+                action=lambda: tools.declare_scope(desktop, scope, handles),
+            )
+        )
+
+    @mcp.tool
+    def get_scope() -> list[dict[str, Any]]:
+        """当前的任务作用域：每个窗口的句柄、标题与进程名，记的是声明时的样子。尚未声明时为空。"""
+
+        return log.run(
+            tool="get_scope",
+            target={},
+            intent=None,
+            evidence_window=None,
+            action=lambda: tools.get_scope(scope),
+        )
+
+    @mcp.tool
+    def click(screenshot_id: str, x: int, y: int, intent: str) -> dict[str, Any]:
+        """在某张截图的像素 `(x, y)` 处单击鼠标左键。
+
+        坐标用那张截图的像素坐标给出，换算到屏幕由服务端完成。执行前做命中测试：
+        落点处的窗口不在任务作用域内、或是高危窗口时拒绝执行并说明原因。
+        `intent` 用一句话说明这次点击要做什么，记入动作日志。
+        返回落点处的窗口与落点的屏幕物理像素坐标（仅供参考）。
+        """
+
+        window = _window_of(screenshots, screenshot_id)
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="click",
+                target={"window": window, "screenshot_id": screenshot_id, "x": x, "y": y},
+                intent=intent,
+                evidence_window=window,
+                action=lambda: tools.click(desktop, screenshots, scope, screenshot_id, x, y),
+            )
+        )
+
     return mcp
 
 
@@ -98,11 +154,17 @@ def _window_of(screenshots: Screenshots, screenshot_id: str) -> int | None:
         return None
 
 
-def _observed_result(observe: Callable[[], tools.Observed]) -> ToolResult:
+def _refusal_as_tool_error(call: Callable[[], T]) -> T:
+    """把核心的拒绝与拦截原样转成回给模型的工具错误。"""
+
     try:
-        observed = observe()
-    except ObservationError as error:
+        return call()
+    except (ObservationError, ScopeError, Intercepted) as error:
         raise ToolError(str(error)) from error
+
+
+def _observed_result(observe: Callable[[], tools.Observed]) -> ToolResult:
+    observed = _refusal_as_tool_error(observe)
     return ToolResult(
         content=[
             Image(data=observed.png, format="png").to_image_content(),

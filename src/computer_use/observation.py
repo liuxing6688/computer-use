@@ -50,6 +50,11 @@ class Screenshot:
     def to_screen(self, x: int, y: int) -> tuple[int, int]:
         """截图上的像素 `(x, y)` 在屏幕上的物理像素坐标，取像素中心所落的那个物理像素。"""
 
+        if not (0 <= x < self.image.width and 0 <= y < self.image.height):
+            raise ObservationError(
+                f"坐标 ({x}, {y}) 不在截图 {self.id} 的范围内"
+                f"（{self.image.width}×{self.image.height}）"
+            )
         return (
             self.region.left + int((x + 0.5) * self.region.width / self.image.width),
             self.region.top + int((y + 0.5) * self.region.height / self.image.height),

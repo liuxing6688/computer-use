@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
+import win32gui
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from fastmcp.exceptions import ToolError
@@ -112,6 +113,51 @@ def test_失败的调用在真实磁盘上留下日志与记事本的截图(
     assert list((tmp_path / "evidence").iterdir()) == [evidence]
 
 
+def test_点击按截图像素坐标落在记事本上_缩放下落点一致(
+    notepad: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    desktop = Win32Desktop(data_dir=tmp_path)
+    window = _await_notepad(lambda: list_windows(desktop))
+
+    async def call() -> tuple[dict[str, Any], dict[str, Any]]:
+        async with Client(create_server(desktop)) as client:
+            await client.call_tool("declare_scope", {"handles": [window["handle"]]})
+            observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+            size = observed.data["size"]
+            clicked = await client.call_tool(
+                "click",
+                {
+                    "screenshot_id": observed.data["screenshot_id"],
+                    "x": size["width"] // 2,
+                    "y": size["height"] // 2,
+                    "intent": "点记事本的编辑区",
+                },
+            )
+            return observed.data, clicked.data
+
+    observed, clicked = asyncio.run(call())
+
+    point, scale = clicked["screen_point"], observed["scale"]
+    center_x = observed["screen_offset"]["x"] + observed["size"]["width"] / scale / 2
+    center_y = observed["screen_offset"]["y"] + observed["size"]["height"] / scale / 2
+    assert abs(point["x"] - center_x) <= 1 / scale
+    assert abs(point["y"] - center_y) <= 1 / scale
+    assert clicked["window"]["handle"] == window["handle"]
+    assert win32gui.GetForegroundWindow() == window["handle"], "点击没有落在记事本上"
+    logical_x, logical_y = _dpi_unaware_cursor()
+    assert abs(logical_x * observed["dpi_scale"] - point["x"]) <= observed["dpi_scale"]
+    assert abs(logical_y * observed["dpi_scale"] - point["y"]) <= observed["dpi_scale"]
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "actions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [(r["tool"], r["outcome"]) for r in records] == [
+        ("declare_scope", "succeeded"),
+        ("observe_window", "succeeded"),
+        ("click", "succeeded"),
+    ]
+
+
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:
     """Claude Code 就是这样连上来的：拉起一个子进程，走 stdio 说 MCP。"""
 
@@ -122,6 +168,9 @@ def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[
     async def call() -> list[dict[str, Any]]:
         async with Client(transport) as client:
             assert sorted(tool.name for tool in await client.list_tools()) == [
+                "click",
+                "declare_scope",
+                "get_scope",
                 "list_windows",
                 "observe_window",
                 "zoom",
@@ -150,6 +199,19 @@ def _dpi_unaware_view(handle: int) -> tuple[float, int]:
     ).stdout
     scale, width = output.split()
     return round(float(scale), 2), int(width)
+
+
+def _dpi_unaware_cursor() -> tuple[int, int]:
+    """一个未声明 DPI 感知的子进程眼里的光标位置，即逻辑像素，与本进程的声明无关。"""
+
+    output = subprocess.run(
+        [sys.executable, "-c", "import win32api; print(*win32api.GetCursorPos())"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    x, y = output.split()
+    return int(x), int(y)
 
 
 def _await_notepad(

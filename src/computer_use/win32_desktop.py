@@ -8,7 +8,7 @@ import secrets
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Collection, Sequence
 
 import win32con
 import win32gui
@@ -51,6 +51,66 @@ _user32.GetDpiForWindow.argtypes = (wintypes.HWND,)
 _user32.PrintWindow.restype = wintypes.BOOL
 _user32.PrintWindow.argtypes = (wintypes.HWND, wintypes.HDC, wintypes.UINT)
 
+_user32.WindowFromPoint.restype = wintypes.HWND
+_user32.WindowFromPoint.argtypes = (wintypes.POINT,)
+_user32.GetAncestor.restype = wintypes.HWND
+_user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+_user32.SetCursorPos.restype = wintypes.BOOL
+_user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
+_user32.GetCursorPos.restype = wintypes.BOOL
+_user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    )
+
+
+class _INPUT(ctypes.Structure):
+    """`INPUT` 只取鼠标一支；`MOUSEINPUT` 是联合体里最大的成员，结构体大小不变。"""
+
+    _fields_ = (("type", wintypes.DWORD), ("mi", _MOUSEINPUT))
+
+
+_user32.SendInput.restype = wintypes.UINT
+_user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int)
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = (
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    )
+
+
+_kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+_kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+_kernel32.Process32FirstW.restype = wintypes.BOOL
+_kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W))
+_kernel32.Process32NextW.restype = wintypes.BOOL
+_kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W))
+
+_GA_ROOT = 2
+_INPUT_MOUSE = 0
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_LEFTUP = 0x0004
+_TH32CS_SNAPPROCESS = 0x2
+_INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
 _dwmapi.DwmGetWindowAttribute.restype = ctypes.HRESULT
 _dwmapi.DwmGetWindowAttribute.argtypes = (
@@ -64,7 +124,7 @@ _dwmapi.DwmGetWindowAttribute.argtypes = (
 class Win32Desktop:
     """用 Win32 API 采集真实桌面的事实。
 
-    构造即声明 `PER_MONITOR_AWARE_V2`，因此窗口矩形一律是物理像素。
+    构造即声明 `PER_MONITOR_AWARE_V2`，因此窗口矩形、命中测试与鼠标坐标一律是物理像素。
     动作日志写在 `data_dir/actions.jsonl`，留证截图存在 `data_dir/evidence/`；
     `data_dir` 缺省为 `%LOCALAPPDATA%\\computer-use`。
     """
@@ -72,6 +132,7 @@ class Win32Desktop:
     def __init__(self, data_dir: Path | None = None) -> None:
         _declare_dpi_awareness()
         self._data_dir = data_dir or Path(os.environ["LOCALAPPDATA"]) / "computer-use"
+        self._agent_processes = _ancestry(os.getpid())
 
     def list_windows(self) -> Sequence[Window]:
         windows: list[Window] = []
@@ -96,6 +157,37 @@ class Win32Desktop:
         return Capture(
             image=image, rect=frame, dpi_scale=_user32.GetDpiForWindow(handle) / 96
         )
+
+    def window_at(self, x: int, y: int) -> int | None:
+        child = _user32.WindowFromPoint(wintypes.POINT(x, y))
+        if not child:
+            return None
+        root: int | None = _user32.GetAncestor(child, _GA_ROOT)
+        return root or None
+
+    def agent_process_ids(self) -> Collection[int]:
+        return self._agent_processes
+
+    def click(self, x: int, y: int) -> None:
+        """把光标移到 `(x, y)` 再按下、抬起左键。
+
+        先 `SetCursorPos` 再注入不带坐标的按键：`SendInput` 的绝对坐标要归一化到 0–65535，
+        取整会让落点偏一个像素，而 `SetCursorPos` 是精确的。
+        鼠标输入送往光标下的窗口并顺带激活它，不必先 `SetForegroundWindow`；键盘输入才须如此。
+        """
+
+        if not _user32.SetCursorPos(x, y):
+            raise ctypes.WinError(ctypes.get_last_error())
+        cursor = wintypes.POINT()
+        _user32.GetCursorPos(ctypes.byref(cursor))
+        if (cursor.x, cursor.y) != (x, y):
+            raise OSError(f"光标没能移到 ({x}, {y})，停在了 ({cursor.x}, {cursor.y})")
+        inputs = (_INPUT * 2)(
+            _INPUT(type=_INPUT_MOUSE, mi=_MOUSEINPUT(dwFlags=_MOUSEEVENTF_LEFTDOWN)),
+            _INPUT(type=_INPUT_MOUSE, mi=_MOUSEINPUT(dwFlags=_MOUSEEVENTF_LEFTUP)),
+        )
+        if _user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT)) != len(inputs):
+            raise ctypes.WinError(ctypes.get_last_error())
 
     def append_log(self, line: str) -> None:
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -191,14 +283,62 @@ def _collect(handle: int, windows: list[Window]) -> None:
 
 def _read(handle: int) -> Window:
     left, top, right, bottom = win32gui.GetWindowRect(handle)
+    process_id = _owning_process(handle)
     return Window(
         handle=handle,
         title=win32gui.GetWindowText(handle),
-        process_name=_process_name(handle),
+        process_id=process_id,
+        process_name=_process_name(process_id),
         rect=Rect(left=left, top=top, width=right - left, height=bottom - top),
         is_visible=_is_user_facing(handle),
         is_minimized=bool(win32gui.IsIconic(handle)),
+        owner=win32gui.GetWindow(handle, win32con.GW_OWNER) or None,
     )
+
+
+def _owning_process(handle: int) -> int:
+    """窗口真正所属的进程。
+
+    UWP 应用（系统设置、计算器等）的顶层窗口是 `ApplicationFrameHost.exe` 画的框，
+    应用本身的界面是框里另一个进程的子窗口；此时取那个子窗口的进程，否则系统设置认不出来。
+    应用挂起时框里没有这个子窗口，只好退回框的进程。
+    """
+
+    _, frame_process = win32process.GetWindowThreadProcessId(handle)
+    if win32gui.GetClassName(handle) != "ApplicationFrameWindow":
+        return int(frame_process)
+    children: list[int] = []
+    win32gui.EnumChildWindows(handle, lambda child, _: children.append(child), None)
+    for child in children:
+        _, process = win32process.GetWindowThreadProcessId(child)
+        if process != frame_process:
+            return int(process)
+    return int(frame_process)
+
+
+def _ancestry(process_id: int) -> frozenset[int]:
+    """`process_id` 及其各级父进程。
+
+    只在启动时取一次：中间某一级日后退出了，链条也不会因此断开、把 Agent 的窗口漏掉。
+    某一级在本服务启动前就已退出时，更上面的祖先无从得知。
+    """
+
+    snapshot = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if snapshot == _INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    parents: dict[int, int] = {}
+    try:
+        entry = _PROCESSENTRY32W(dwSize=ctypes.sizeof(_PROCESSENTRY32W))
+        more = _kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            more = _kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        _kernel32.CloseHandle(snapshot)
+    chain = [process_id]
+    while (parent := parents.get(chain[-1])) and parent not in chain:
+        chain.append(parent)
+    return frozenset(chain)
 
 
 def _is_user_facing(handle: int) -> bool:
@@ -239,14 +379,13 @@ def _is_cloaked(handle: int) -> bool:
     return cloaked.value != 0
 
 
-def _process_name(handle: int) -> str:
-    """窗口所属进程的可执行文件名；够不到那个进程时返回空串。
+def _process_name(process_id: int) -> str:
+    """进程的可执行文件名；够不到那个进程时返回空串。
 
     提权进程的句柄在普通权限下一律打不开，这是预期情形而非错误：窗口本身仍要列出。
     """
 
-    _, pid = win32process.GetWindowThreadProcessId(handle)
-    process = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    process = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
     if not process:
         return ""
     try:

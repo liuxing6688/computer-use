@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Collection, Protocol, Sequence
 
 from PIL.Image import Image
 
@@ -27,14 +27,18 @@ class Window:
     """桌面上一个顶层窗口。
 
     `handle` 是 Win32 的 HWND，后续的按窗口截图与命中测试都以它指称窗口。
+    `process_name` 是所属进程的可执行文件名，够不到那个进程（例如它是提权进程）时为空串。
+    `owner` 是它的所有者窗口（对话框、弹出菜单所依附的那个窗口），没有时为 `None`。
     """
 
     handle: int
     title: str
+    process_id: int
     process_name: str
     rect: Rect
     is_visible: bool
     is_minimized: bool
+    owner: int | None
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,18 @@ class DesktopPort(Protocol):
 
         窗口已经不在时抛 `WindowUnavailable`。
         """
+        ...
+
+    def window_at(self, x: int, y: int) -> int | None:
+        """屏幕物理像素 `(x, y)` 处最上层的顶层窗口；那里没有窗口时为 `None`。"""
+        ...
+
+    def agent_process_ids(self) -> Collection[int]:
+        """Agent 自身所在的进程：本服务及其各级父进程，其中之一持有 Agent 所在的窗口。"""
+        ...
+
+    def click(self, x: int, y: int) -> None:
+        """在屏幕物理像素 `(x, y)` 处单击鼠标左键。"""
         ...
 
     def append_log(self, line: str) -> None:

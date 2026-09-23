@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
-from computer_use import observation
+from computer_use import actions, observation
 from computer_use.desktop import DesktopPort, Rect, Window
 from computer_use.observation import Screenshot, Screenshots
+from computer_use.scope import TaskScope
 from computer_use.windows import operable_windows
 
 
@@ -43,6 +44,46 @@ def zoom(screenshots: Screenshots, screenshot_id: str, rect: Rect) -> Observed:
     return _as_observed(observation.zoom(screenshots, screenshot_id, rect))
 
 
+def declare_scope(
+    desktop: DesktopPort, scope: TaskScope, handles: Sequence[int]
+) -> list[dict[str, Any]]:
+    """声明本次任务涉及的窗口，替换原有的任务作用域，返回声明后的作用域。"""
+
+    scope.declare(desktop, handles)
+    return get_scope(scope)
+
+
+def get_scope(scope: TaskScope) -> list[dict[str, Any]]:
+    """只读工具：当前的任务作用域，每个窗口记的是声明时的样子。"""
+
+    return [_as_identity(w) for w in scope.windows]
+
+
+def click(
+    desktop: DesktopPort,
+    screenshots: Screenshots,
+    scope: TaskScope,
+    screenshot_id: str,
+    x: int,
+    y: int,
+) -> dict[str, Any]:
+    """输入工具：在某张截图的像素 `(x, y)` 处单击，返回实际落点。"""
+
+    landed = actions.click(desktop, screenshots, scope, screenshot_id, x, y)
+    return {
+        "window": _as_identity(landed.window),
+        "screen_point": {"x": landed.x, "y": landed.y},
+    }
+
+
+def _as_identity(window: Window) -> dict[str, Any]:
+    return {
+        "handle": window.handle,
+        "title": window.title,
+        "process_name": window.process_name,
+    }
+
+
 def _as_observed(screenshot: Screenshot) -> Observed:
     png = io.BytesIO()
     screenshot.image.save(png, format="PNG")
@@ -51,11 +92,7 @@ def _as_observed(screenshot: Screenshot) -> Observed:
         png=png.getvalue(),
         metadata={
             "screenshot_id": screenshot.id,
-            "window": {
-                "handle": screenshot.window.handle,
-                "title": screenshot.window.title,
-                "process_name": screenshot.window.process_name,
-            },
+            "window": _as_identity(screenshot.window),
             "captured_at": screenshot.captured_at.isoformat(),
             "size": {"width": screenshot.image.width, "height": screenshot.image.height},
             "scale": screenshot.scale,

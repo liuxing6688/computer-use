@@ -135,6 +135,58 @@ def test_每次工具调用都记入动作日志_失败的调用留下目标窗�
     assert "404" in missing["detail"]
 
 
+def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入日志() -> None:
+    desktop = FakeDesktop(
+        [
+            window(handle=2, title="弹出的广告", process_name="ad.exe", rect=Rect(100, 50, 50, 50)),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(100, 50, 320, 240)),
+        ],
+        images={1: Image.new("RGB", (320, 240), "red")},
+    )
+
+    async def call() -> tuple[Any, Any, str, str]:
+        async with Client(create_server(desktop)) as client:
+            declared = await client.call_tool("declare_scope", {"handles": [1]})
+            scope = await client.call_tool("get_scope", {})
+            observed = await client.call_tool("observe_window", {"handle": 1})
+            screenshot_id: str = observed.data["screenshot_id"]
+            with pytest.raises(ToolError, match="任务作用域之外") as refused:
+                await client.call_tool(
+                    "click", {"screenshot_id": screenshot_id, "x": 10, "y": 10, "intent": "点编辑区"}
+                )
+            clicked = await client.call_tool(
+                "click", {"screenshot_id": screenshot_id, "x": 100, "y": 100, "intent": "点编辑区"}
+            )
+            assert declared.data == scope.data
+            return scope.data, clicked.data, screenshot_id, str(refused.value)
+
+    scope, clicked, screenshot_id, refusal = asyncio.run(call())
+
+    assert scope == [{"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"}]
+    assert clicked["screen_point"] == {"x": 200, "y": 150}
+    assert desktop.clicks == [(200, 150)]
+    declared_record, _, _, refused_record, clicked_record = desktop.action_log()
+    assert (declared_record["tool"], declared_record["target"]) == ("declare_scope", {"windows": [1]})
+    assert declared_record["outcome"] == "succeeded"
+    assert refused_record["tool"] == "click"
+    assert refused_record["target"] == {"window": 1, "screenshot_id": screenshot_id, "x": 10, "y": 10}
+    assert refused_record["intent"] == "点编辑区"
+    assert (refused_record["verdict"], refused_record["outcome"]) == ("intercepted", "not_executed")
+    assert refused_record["detail"] in refusal
+    assert Image.open(io.BytesIO(desktop.evidence[refused_record["evidence"]])).size == (320, 240)
+    assert (clicked_record["verdict"], clicked_record["outcome"]) == ("allowed", "succeeded")
+    assert clicked_record["evidence"] is None
+
+
+def test_声明不可操作的窗口经由_MCP_返回错误() -> None:
+    async def call() -> None:
+        async with Client(create_server(FakeDesktop())) as client:
+            await client.call_tool("declare_scope", {"handles": [404]})
+
+    with pytest.raises(ToolError, match="404"):
+        asyncio.run(call())
+
+
 def _image_size(result: CallToolResult) -> tuple[int, int]:
     [image] = [c for c in result.content if isinstance(c, ImageContent)]
     assert image.mime_type == "image/png"

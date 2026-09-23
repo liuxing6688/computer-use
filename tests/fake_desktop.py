@@ -11,10 +11,11 @@ from computer_use.desktop import Capture, Rect, Window, WindowUnavailable
 
 
 class FakeDesktop:
-    """按给定的窗口布局回答枚举，按预置截图回答截图，不需要真实桌面。
+    """按给定的窗口布局回答枚举、截图与命中测试，不需要真实桌面。
 
-    没有预置截图的窗口截出来是一张与窗口等大的白图。`gone` 中的窗口仍会被枚举出来，
-    但截图时已经关掉了。动作日志与留证截图都留在内存里，按位置可查。
+    `windows` 的顺序即 Z 序，排在前面的在上层。没有预置截图的窗口截出来是一张与窗口等大的白图。
+    `gone` 中的窗口仍会被枚举出来，但截图时已经关掉了。`agent_processes` 是 Agent 自身所在的进程。
+    注入的点击、动作日志与留证截图都留在内存里，可供断言。
     """
 
     def __init__(
@@ -24,11 +25,14 @@ class FakeDesktop:
         images: Mapping[int, Image.Image] | None = None,
         dpi_scale: float = 1.0,
         gone: Collection[int] = (),
+        agent_processes: Collection[int] = (),
     ) -> None:
         self._windows = list(windows)
         self._images = dict(images or {})
         self._dpi_scale = dpi_scale
         self._gone = set(gone)
+        self._agent_processes = frozenset(agent_processes)
+        self.clicks: list[tuple[int, int]] = []
         self.log_lines: list[str] = []
         self.evidence: dict[str, bytes] = {}
 
@@ -43,6 +47,25 @@ class FakeDesktop:
         image = self._images.get(handle) or Image.new("RGB", size, "white")
         assert image.size == size, "预置截图须与窗口矩形等大"
         return Capture(image=image, rect=window.rect, dpi_scale=self._dpi_scale)
+
+    def window_at(self, x: int, y: int) -> int | None:
+        for w in self._windows:
+            r = w.rect
+            if (
+                w.is_visible
+                and not w.is_minimized
+                and w.handle not in self._gone
+                and r.left <= x < r.left + r.width
+                and r.top <= y < r.top + r.height
+            ):
+                return w.handle
+        return None
+
+    def agent_process_ids(self) -> Collection[int]:
+        return self._agent_processes
+
+    def click(self, x: int, y: int) -> None:
+        self.clicks.append((x, y))
 
     def append_log(self, line: str) -> None:
         assert "\n" not in line, "一条日志须是一行"
@@ -63,18 +86,22 @@ def window(
     *,
     handle: int = 1,
     title: str = "无标题 - 记事本",
+    process_id: int | None = None,
     process_name: str = "notepad.exe",
     rect: Rect = Rect(left=0, top=0, width=800, height=600),
     is_visible: bool = True,
     is_minimized: bool = False,
+    owner: int | None = None,
 ) -> Window:
-    """构造一个窗口，默认是一个可见、有标题的普通窗口。"""
+    """构造一个窗口，默认是一个可见、有标题的普通窗口，各自属于一个与句柄同号的进程。"""
 
     return Window(
         handle=handle,
         title=title,
+        process_id=handle if process_id is None else process_id,
         process_name=process_name,
         rect=rect,
         is_visible=is_visible,
         is_minimized=is_minimized,
+        owner=owner,
     )
