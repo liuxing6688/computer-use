@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Collection, Mapping, Sequence
+from typing import Any, Callable, Collection, Literal, Mapping, Sequence
 
 from PIL import Image
 
@@ -13,6 +13,8 @@ from computer_use.desktop import (
     Capture,
     Clipboard,
     ClipboardUnavailable,
+    DirEntry,
+    FileError,
     ForegroundError,
     InjectionError,
     LaunchError,
@@ -54,6 +56,7 @@ class FakeDesktop:
         agent_processes: Collection[int] = (),
         texts: Sequence[tuple[Rect, str]] = (),
         unreadable: bool = False,
+        files: Mapping[str, str | None] | None = None,
     ) -> None:
         self._windows = list(windows)
         self._images = dict(images or {})
@@ -83,6 +86,9 @@ class FakeDesktop:
         self.trace: list[tuple[object, ...]] = []
         self.dialogs: list[ShownDialog] = []
         self.dialog_reply: bool | None = True
+        self._files = {_normalize_path(path): content for path, content in (files or {}).items()}
+        self.recycled: list[str] = []
+        self.deleted: list[str] = []
         self.focus_fails = False
         self.clipboard_read_fails = False
         self.clipboard_write_fails = False
@@ -223,6 +229,74 @@ class FakeDesktop:
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         self.stop_hotkey = on_stop
 
+    def path_kind(self, path: str) -> Literal["file", "dir"] | None:
+        key = _normalize_path(path)
+        if isinstance(self._files.get(key), str):
+            return "file"
+        if _is_dir(self._files, key):
+            return "dir"
+        return None
+
+    def write_text(self, path: str, content: str) -> None:
+        target = _normalize_path(path)
+        parent = target.rsplit("/", 1)[0]
+        if parent == target or not _is_dir(self._files, parent):
+            raise FileError(f"写不进文件：{path}")
+        if self._files.get(target) is None and target in self._files:
+            raise FileError(f"写不进文件：{path}")
+        self._files[target] = content
+
+    def delete_path(self, path: str, *, permanent: bool) -> None:
+        key = _normalize_path(path)
+        if self.path_kind(path) is None:
+            raise FileError(f"删不掉：{path}")
+        prefix = key + "/"
+        for existing in [item for item in self._files if item == key or item.startswith(prefix)]:
+            del self._files[existing]
+        (self.deleted if permanent else self.recycled).append(path)
+
+    def move_path(self, source: str, destination: str) -> None:
+        src = _normalize_path(source)
+        dst = _normalize_path(destination)
+        kind = self.path_kind(source)
+        if kind is None:
+            raise FileError(f"移不走：{source}")
+        parent = dst.rsplit("/", 1)[0]
+        if parent == dst or not _is_dir(self._files, parent):
+            raise FileError(f"移不走：{source}")
+        if self.path_kind(destination) == "dir":
+            raise FileError(f"移不走：{source}")
+        prefix = src + "/"
+        moving = {
+            key: content
+            for key, content in self._files.items()
+            if key == src or key.startswith(prefix)
+        }
+        for key in moving:
+            del self._files[key]
+        for key, content in moving.items():
+            self._files[dst + key[len(src) :]] = content
+
+    def read_text(self, path: str) -> str:
+        content = self._files.get(_normalize_path(path))
+        if not isinstance(content, str):
+            raise FileError(f"读不到文件：{path}")
+        return content
+
+    def list_dir(self, path: str) -> Sequence[DirEntry]:
+        root = _normalize_path(path)
+        if not _is_dir(self._files, root):
+            raise FileError(f"不是目录：{path}")
+        prefix = root + "/"
+        children: dict[str, bool] = {}
+        for key, content in self._files.items():
+            if not key.startswith(prefix):
+                continue
+            name = key[len(prefix) :].split("/", 1)[0]
+            rest = key[len(prefix) + len(name) :]
+            children[name] = rest != "" or content is None
+        return tuple(DirEntry(name, is_dir) for name, is_dir in sorted(children.items()))
+
     def confirm(
         self, *, title: str, message: str, image: Image.Image | None, timeout: float
     ) -> bool | None:
@@ -238,6 +312,17 @@ class FakeDesktop:
         """动作日志逐行解析后的记录。"""
 
         return [json.loads(line) for line in self.log_lines]
+
+
+def _normalize_path(path: str) -> str:
+    return path.replace("\\", "/").rstrip("/")
+
+
+def _is_dir(files: Mapping[str, str | None], path: str) -> bool:
+    if files.get(path) is None and path in files:
+        return True
+    prefix = path + "/"
+    return any(key.startswith(prefix) for key in files)
 
 
 def window(

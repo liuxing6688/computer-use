@@ -15,6 +15,15 @@ from typing import Any, Mapping
 from computer_use.desktop import DesktopPort, Rect, TextUnreadable
 from computer_use.observation import Screenshot
 
+FILE_MUTATIONS = frozenset({"write_file", "move_file", "delete_file"})
+"""一律须经人确认的文件变更。模型把 dangerous 报成 false 也不能自己放行。"""
+
+_FILE_REASONS = {
+    "write_file": "写入文件须经人确认",
+    "move_file": "移动文件须经人确认",
+    "delete_file": "删除文件须经人确认",
+}
+
 INPUT_TOOLS = frozenset(
     {
         "click",
@@ -84,8 +93,16 @@ class Verdict:
 
 
 def judge_call(tool: str, arguments: Mapping[str, Any]) -> Verdict:
-    """凭调用参数判定：输入工具的调用除非明确自报 `dangerous` 为 `false`，否则判为危险。"""
+    """凭调用参数判定。
 
+    输入工具除非明确自报 `dangerous` 为 `false`，否则判为危险。
+    写入、移动、删除一律判为危险，自报成 `false` 也不放行；永久删除另有一条更重的理由。
+    """
+
+    if tool in FILE_MUTATIONS:
+        if tool == "delete_file" and arguments.get("permanent") is True:
+            return Verdict(("永久删除须经人确认",))
+        return Verdict((_FILE_REASONS[tool],))
     if tool not in INPUT_TOOLS:
         return Verdict()
     declared = arguments.get("dangerous")

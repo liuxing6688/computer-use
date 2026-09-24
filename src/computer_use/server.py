@@ -18,6 +18,7 @@ from computer_use.actions import ActionError
 from computer_use.desktop import (
     ClipboardUnavailable,
     DesktopPort,
+    FileError,
     ForegroundError,
     InjectionError,
     LaunchError,
@@ -51,6 +52,11 @@ INSTRUCTIONS = f"""\
 把 `dangerous` 改成 true 不能代替这次确认。
 急停热键是 Ctrl+Break：按下后正在等待的输入被取消，之后所有输入工具拒绝，直到调用 `resume` 并经人确认。
 只读工具在急停后仍可用。
+`read_file` 与 `list_directory` 直接读盘，无需确认。
+`write_file`、`move_file`、`delete_file` 一律要由人在 Claude Code 里确认后才执行；
+确认里能看到目标路径和变更类型，盖过已有文件时会写明是覆盖。
+`delete_file` 默认把文件移入回收站。永久删除要显式传入 `permanent: true`，
+那一次在确认之后还会弹出系统对话框，人拒绝或超时都不删除。
 """
 
 
@@ -118,6 +124,110 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                 dangerous=None,
                 evidence_window=window,
                 action=lambda: tools.zoom(screenshots, screenshot_id, rect),
+            )
+        )
+
+    @mcp.tool
+    def read_file(path: str) -> dict[str, Any]:
+        """读出文本文件的内容。只读，无需确认。"""
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="read_file",
+                target={"path": path},
+                intent=None,
+                dangerous=None,
+                evidence_window=None,
+                action=lambda: tools.read_file(desktop, path),
+            )
+        )
+
+    @mcp.tool
+    def list_directory(path: str) -> list[dict[str, Any]]:
+        """列出目录的直接子项，每项有名字以及是否为目录。只读，无需确认。"""
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="list_directory",
+                target={"path": path},
+                intent=None,
+                dangerous=None,
+                evidence_window=None,
+                action=lambda: tools.list_directory(desktop, path),
+            )
+        )
+
+    @mcp.tool
+    def write_file(path: str, content: str, intent: str, dangerous: bool) -> dict[str, Any]:
+        """把文本写入文件。父目录须已存在。
+
+        新建与覆盖都要由人在 Claude Code 中确认后才会执行。确认信息含目标路径与变更类型；
+        路径上已有文件时，变更类型为覆盖。文件内容不写入动作日志。
+        `intent` 用一句话说明这次写入要做什么。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="write_file",
+                target={"path": path},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=None,
+                action=lambda: tools.write_file(
+                    desktop, path, content, intent=intent, dangerous=dangerous
+                ),
+            )
+        )
+
+    @mcp.tool
+    def move_file(
+        source: str, destination: str, intent: str, dangerous: bool
+    ) -> dict[str, Any]:
+        """把文件或目录挪到新路径。一律须经人确认。
+
+        确认信息含两端路径。目标已是文件时，变更类型为覆盖。
+        `intent` 用一句话说明这次移动要做什么。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="move_file",
+                target={"source": source, "destination": destination},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=None,
+                action=lambda: tools.move_file(
+                    desktop, source, destination, intent=intent, dangerous=dangerous
+                ),
+            )
+        )
+
+    @mcp.tool
+    def delete_file(
+        path: str, intent: str, dangerous: bool, permanent: bool | None = None
+    ) -> dict[str, Any]:
+        """删除文件或目录。默认移入回收站。
+
+        一律须经人确认，确认信息含目标路径与变更类型。
+        `permanent` 为 true 时改为永久删除：这一次在 Claude Code 的确认之后还会弹出系统对话框，
+        人拒绝或超时都不删除。省略 `permanent` 就是移入回收站，不能靠改这个参数复用同一次确认。
+        `intent` 用一句话说明这次删除要做什么。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="delete_file",
+                target={"path": path, "permanent": permanent is True},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=None,
+                action=lambda: tools.delete_file(
+                    desktop,
+                    path,
+                    intent=intent,
+                    dangerous=dangerous,
+                    permanent=permanent,
+                ),
             )
         )
 
@@ -430,6 +540,7 @@ def _refusal_as_tool_error(call: Callable[[], T]) -> T:
         ClipboardUnavailable,
         InjectionError,
         LaunchError,
+        FileError,
     ) as error:
         raise ToolError(str(error)) from error
 

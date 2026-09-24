@@ -7,6 +7,7 @@ import ctypes
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Collection, Sequence, TypeGuard, TypeVar, cast
+from typing import Any, Collection, Literal, Sequence, TypeGuard, TypeVar, cast
 
 import win32clipboard
 import win32con
@@ -32,6 +33,8 @@ from computer_use.desktop import (
     Capture,
     Clipboard,
     ClipboardUnavailable,
+    DirEntry,
+    FileError,
     ForegroundError,
     InjectionError,
     LaunchError,
@@ -427,6 +430,48 @@ class Win32Desktop:
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         _StopHotkey.install(on_stop)
 
+    def path_kind(self, path: str) -> Literal["file", "dir"] | None:
+        target = Path(path)
+        if target.is_file():
+            return "file"
+        if target.is_dir():
+            return "dir"
+        return None
+
+    def write_text(self, path: str, content: str) -> None:
+        try:
+            Path(path).write_text(content, encoding="utf-8")
+        except OSError as error:
+            raise FileError(f"写不进文件：{path}") from error
+
+    def delete_path(self, path: str, *, permanent: bool) -> None:
+        if permanent:
+            _erase(path)
+            return
+        _recycle(path)
+
+    def move_path(self, source: str, destination: str) -> None:
+        try:
+            Path(source).replace(destination)
+        except OSError as error:
+            raise FileError(f"移不走：{source}") from error
+
+    def read_text(self, path: str) -> str:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError as error:
+            raise FileError(f"读不到文件：{path}") from error
+
+    def list_dir(self, path: str) -> Sequence[DirEntry]:
+        try:
+            entries = [
+                DirEntry(name=child.name, is_dir=child.is_dir())
+                for child in Path(path).iterdir()
+            ]
+        except OSError as error:
+            raise FileError(f"不是目录：{path}") from error
+        return tuple(sorted(entries, key=lambda entry: entry.name))
+
     def confirm(
         self, *, title: str, message: str, image: Image.Image | None, timeout: float
     ) -> bool | None:
@@ -464,6 +509,52 @@ class _StopHotkey:
         while _user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
             if message.message == _WM_HOTKEY and cls.callback is not None:
                 cls.callback()
+
+
+class _SHFILEOPSTRUCTW(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("wFunc", wintypes.UINT),
+        ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR),
+        ("fFlags", wintypes.WORD),
+        ("fAnyOperationsAborted", wintypes.BOOL),
+        ("hNameMappings", ctypes.c_void_p),
+        ("lpszProgressTitle", wintypes.LPCWSTR),
+    ]
+
+
+_FO_DELETE = 3
+_FOF_SILENT = 0x0004
+_FOF_NOCONFIRMATION = 0x0010
+_FOF_ALLOWUNDO = 0x0040
+_FOF_NOERRORUI = 0x0400
+
+_shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+_shell32.SHFileOperationW.argtypes = (ctypes.POINTER(_SHFILEOPSTRUCTW),)
+_shell32.SHFileOperationW.restype = ctypes.c_int
+
+
+def _recycle(path: str) -> None:
+    """`SHFileOperation` 的 `FOF_ALLOWUNDO`：进回收站，而不是直接抹掉。"""
+
+    source = ctypes.create_unicode_buffer(str(Path(path)) + "\0")
+    operation = _SHFILEOPSTRUCTW(wFunc=_FO_DELETE, pFrom=ctypes.cast(source, wintypes.LPCWSTR))
+    operation.fFlags = _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
+    code = _shell32.SHFileOperationW(ctypes.byref(operation))
+    if code != 0 or operation.fAnyOperationsAborted:
+        raise FileError(f"删不掉：{path}")
+
+
+def _erase(path: str) -> None:
+    target = Path(path)
+    try:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except OSError as error:
+        raise FileError(f"删不掉：{path}") from error
 
 
 def _place(x: int, y: int) -> None:

@@ -15,6 +15,7 @@ from typing import Any, Mapping, TextIO
 
 from computer_use.danger import INPUT_TOOLS, Verdict, judge_call
 from computer_use.desktop import DesktopPort
+from computer_use.files import describe_change
 from computer_use.interception import refer_to_human
 from computer_use.pace import confirmation_reason
 
@@ -43,7 +44,7 @@ def decide(desktop: DesktopPort, payload: Mapping[str, Any]) -> dict[str, Any] |
             "permissionDecision": "ask",
             "permissionDecisionReason": (
                 f"computer-use 请你裁决一次危险动作（{'；'.join(verdict.reasons)}）。"
-                f"{_describe(tool, arguments)}"
+                f"{_describe(desktop, tool, arguments)}"
             ),
         }
     }
@@ -61,7 +62,7 @@ def main() -> None:
     run(Win32Desktop(), io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8"), sys.stdout)
 
 
-def _describe(tool: str, arguments: Mapping[str, Any]) -> str:
+def _describe(desktop: DesktopPort, tool: str, arguments: Mapping[str, Any]) -> str:
     intent = arguments.get("intent")
     point = {
         "click": "单击",
@@ -86,6 +87,8 @@ def _describe(tool: str, arguments: Mapping[str, Any]) -> str:
         target = f"在截图 {arguments.get('screenshot_id')} 的窗口按下 {chord}"
     elif tool == "launch_app":
         target = f"启动 {arguments.get('app')}"
+    elif (change := describe_change(desktop, tool, arguments)) is not None:
+        target = change
     else:
         target = f"调用 {tool}，参数 {json.dumps(dict(arguments), ensure_ascii=False)}"
     return f"模型自述意图：「{intent}」；{target}。"

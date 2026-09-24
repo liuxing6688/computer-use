@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from computer_use import actions, observation
+from computer_use import actions, files, observation
 from computer_use.desktop import DesktopPort, Rect, Window
 from computer_use.observation import Screenshot, Screenshots
 from computer_use.pace import Pace
@@ -30,6 +30,61 @@ def list_windows(desktop: DesktopPort) -> list[dict[str, Any]]:
     """只读工具：列出桌面上可操作的窗口。"""
 
     return [_as_payload(w) for w in operable_windows(desktop)]
+
+
+def read_file(desktop: DesktopPort, path: str) -> dict[str, Any]:
+    """只读工具：读出文本文件的内容。不经确认。"""
+
+    return {"path": path, "content": desktop.read_text(path)}
+
+
+def list_directory(desktop: DesktopPort, path: str) -> list[dict[str, Any]]:
+    """只读工具：列出目录的直接子项。不经确认。"""
+
+    return [{"name": entry.name, "is_dir": entry.is_dir} for entry in desktop.list_dir(path)]
+
+
+def write_file(
+    desktop: DesktopPort,
+    path: str,
+    content: str,
+    *,
+    intent: str,
+    dangerous: bool,
+) -> dict[str, Any]:
+    """把文本写入文件。一律须经人裁决，覆盖与新建走同一道拦截。"""
+
+    return files.write_file(desktop, path, content, intent=intent, dangerous=dangerous)
+
+
+def move_file(
+    desktop: DesktopPort,
+    source: str,
+    destination: str,
+    *,
+    intent: str,
+    dangerous: bool,
+) -> dict[str, Any]:
+    """移动文件或目录。一律须经人裁决。目标已是文件时确认为覆盖。"""
+
+    return files.move_file(
+        desktop, source, destination, intent=intent, dangerous=dangerous
+    )
+
+
+def delete_file(
+    desktop: DesktopPort,
+    path: str,
+    *,
+    intent: str,
+    dangerous: bool,
+    permanent: bool | None = None,
+) -> dict[str, Any]:
+    """删除文件或目录。默认移入回收站；永久删除须显式请求。一律须经人裁决。"""
+
+    return files.delete_file(
+        desktop, path, intent=intent, dangerous=dangerous, permanent=permanent
+    )
 
 
 def observe_window(

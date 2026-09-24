@@ -1,6 +1,6 @@
-"""核心：外发动作与切换任务作用域的原生确认。
+"""核心：外发动作、切换任务作用域与永久删除的原生确认。
 
-常规危险动作走 PreToolUse hook。这两类最不可挽回的动作在那之后再弹一个系统对话框，
+常规危险动作走 PreToolUse hook。这三类最不可挽回的动作在那之后再弹一个系统对话框，
 模型正在等这次调用返回，插不进手。拒绝和超时都不执行。
 """
 
@@ -56,6 +56,19 @@ def confirm_outbound(
     )
     if sends_content(hits):
         scope.forget_text(window.handle)
+
+
+def confirm_permanent_delete(desktop: DesktopPort, path: str) -> None:
+    """永久删除在 hook 裁决之后再弹一次原生对话框。人拒绝或超时抛 `Intercepted`。"""
+
+    _ask(
+        desktop,
+        title="永久删除需要确认",
+        message=f"即将永久删除，无法从回收站恢复。\n变更类型：永久删除；目标路径：{path}",
+        image=None,
+        rejected="用户拒绝了这次永久删除，文件未删除",
+        timed_out="确认对话框超时，按拒绝处理，文件未删除",
+    )
 
 
 def confirm_scope_switch(

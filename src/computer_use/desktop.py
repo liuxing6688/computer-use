@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Collection, Protocol, Sequence
+from typing import Callable, Collection, Literal, Protocol, Sequence
 
 from PIL.Image import Image
 
@@ -78,6 +78,18 @@ class InjectionError(Exception):
 
 class LaunchError(Exception):
     """进程没能启动。"""
+
+
+class FileError(Exception):
+    """文件操作没能完成；消息原样回给模型。"""
+
+
+@dataclass(frozen=True)
+class DirEntry:
+    """目录里的一个名字。`is_dir` 为真表示它自己也是目录。"""
+
+    name: str
+    is_dir: bool
 
 
 @dataclass(frozen=True)
@@ -205,6 +217,30 @@ class DesktopPort(Protocol):
 
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         """注册全局急停热键 Ctrl+Break。按下时调用 `on_stop`。重复注册只更换回调。"""
+        ...
+
+    def path_kind(self, path: str) -> Literal["file", "dir"] | None:
+        """路径是文件、目录，还是不存在。"""
+        ...
+
+    def write_text(self, path: str, content: str) -> None:
+        """把文本写入文件，父目录须已存在。写不进去时抛 `FileError`。"""
+        ...
+
+    def delete_path(self, path: str, *, permanent: bool) -> None:
+        """删除路径。`permanent` 为假时移入回收站，为真时永久删除。删不掉时抛 `FileError`。"""
+        ...
+
+    def move_path(self, source: str, destination: str) -> None:
+        """把文件或目录挪到新路径。目标已是文件时覆盖它。挪不动时抛 `FileError`。"""
+        ...
+
+    def read_text(self, path: str) -> str:
+        """读出文本文件的内容。路径不存在、或它是目录时抛 `FileError`。"""
+        ...
+
+    def list_dir(self, path: str) -> Sequence[DirEntry]:
+        """列出目录的直接子项，按名字排序。路径不是目录时抛 `FileError`。"""
         ...
 
     def confirm(
