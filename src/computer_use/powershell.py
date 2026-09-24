@@ -134,6 +134,36 @@ _DOWNLOAD_METHODS = frozenset(
         "uploadvalues",
     }
 )
+_MUTATING_METHODS = frozenset(
+    {
+        "delete",
+        "deletefile",
+        "deletedirectory",
+        "moveto",
+        "copyto",
+        "write",
+        "writeline",
+        "writealltext",
+        "writeallbytes",
+        "writealllines",
+        "appendalltext",
+        "appendalllines",
+        "appendtext",
+        "create",
+        "createtext",
+        "createdirectory",
+        "createsubdirectory",
+        "remove",
+        "removeat",
+        "removeall",
+        "clear",
+        "setvalue",
+        "save",
+        "saveas",
+        "kill",
+    }
+)
+_DYNAMIC_METHODS = frozenset({"invoke"})
 _DYNAMIC = frozenset(
     {
         "invoke-expression",
@@ -395,9 +425,18 @@ def _statement(
             index += 1
             continue
         if token.kind == "member":
-            if token.text.lower() in _DOWNLOAD_METHODS:
-                _add(reasons, _FETCH)
+            _classify_member(token.text, reasons)
             index += 1
+            continue
+        if token.kind == "word" and token.text.startswith("."):
+            _classify_member(token.text.lstrip("."), reasons)
+            index += 1
+            continue
+        if token.kind == "word" and token.text.lower() == "-membername":
+            index += 1
+            if index < len(tokens) and tokens[index].kind == "word":
+                _classify_member(tokens[index].text, reasons)
+                index += 1
             continue
         if token.kind == "dynamic":
             _add(reasons, _EVAL)
@@ -451,6 +490,16 @@ def _invoke(tokens: list[_Token], index: int, reasons: list[str]) -> int:
         return index + 1
     _add(reasons, _EVAL)
     return index
+
+
+def _classify_member(name: str, reasons: list[str]) -> None:
+    lowered = name.lower()
+    if lowered in _DOWNLOAD_METHODS:
+        _add(reasons, _FETCH)
+    elif lowered in _DYNAMIC_METHODS:
+        _add(reasons, _EVAL)
+    elif lowered in _MUTATING_METHODS:
+        _add(reasons, _WRITE)
 
 
 def _classify(raw: str, reasons: list[str]) -> None:

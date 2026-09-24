@@ -49,6 +49,26 @@ def test_子表达式里的写操作也要认出来() -> None:
     assert any("写" in reason for reason in verdict.reasons)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "(Get-Item a.txt).Delete()",
+        "Get-ChildItem | ForEach-Object { $_.Delete() }",
+        "Get-ChildItem | ForEach-Object -MemberName Delete",
+    ],
+)
+def test_方法调用里的写操作不会因为前面是只读就被放行(command: str) -> None:
+    verdict = judge_command(command)
+
+    assert verdict.dangerous
+    assert any("写" in reason for reason in verdict.reasons)
+
+
+def test_读取属性不算写操作() -> None:
+    assert not judge_command("(Get-Item a.txt).Length").dangerous
+    assert not judge_command("Get-ChildItem | ForEach-Object -MemberName Length").dangerous
+
+
 def test_比较运算符不是命令() -> None:
     assert not judge_command("Get-ChildItem | Where-Object { $_.Name -eq 'a' }").dangerous
 
