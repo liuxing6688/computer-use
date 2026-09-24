@@ -311,6 +311,96 @@ def test_启动记事本等到窗口_按键落进它(tmp_path: Path) -> None:
             subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
 
 
+def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全程留下日志(tmp_path: Path) -> None:
+    """打开一份已有文件，走完整条链路后 Ctrl+S 就地存盘。
+
+    本机记事本的「另存为」是带所有者的对话框，不出现在可操作窗口里；
+    对已经关联了路径的文档按保存，存盘不依赖那扇对话框。
+    """
+
+    saved = tmp_path / "acceptance.txt"
+    saved.write_text("", encoding="utf-8")
+    desktop = Win32Desktop(data_dir=tmp_path / "computer-use")
+    process = subprocess.Popen(["notepad.exe", str(saved)])
+    try:
+        window = _await_notepad(lambda: list_windows(desktop), pid=process.pid)
+
+        async def call() -> None:
+            async with Client(create_server(desktop)) as client:
+                found = await client.call_tool("list_windows", {})
+                assert any(item["handle"] == window["handle"] for item in found.data)
+                await client.call_tool("declare_scope", {"handles": [window["handle"]]})
+                observed = await client.call_tool("observe_window", {"handle": window["handle"]})
+                size = observed.data["size"]
+                zoomed = await client.call_tool(
+                    "zoom",
+                    {
+                        "screenshot_id": observed.data["screenshot_id"],
+                        "left": size["width"] // 4,
+                        "top": size["height"] // 4,
+                        "width": size["width"] // 2,
+                        "height": size["height"] // 2,
+                    },
+                )
+                zoom_size = zoomed.data["size"]
+                await client.call_tool(
+                    "click",
+                    {
+                        "screenshot_id": zoomed.data["screenshot_id"],
+                        "x": zoom_size["width"] // 2,
+                        "y": zoom_size["height"] // 2,
+                        "intent": "点记事本的编辑区",
+                        "dangerous": False,
+                    },
+                )
+                await client.call_tool(
+                    "type_text",
+                    {
+                        "screenshot_id": observed.data["screenshot_id"],
+                        "text": "computer-use-acceptance",
+                        "intent": "在记事本里输入验收文本",
+                        "dangerous": False,
+                    },
+                )
+                await client.call_tool(
+                    "press_keys",
+                    {
+                        "screenshot_id": observed.data["screenshot_id"],
+                        "keys": ["ctrl", "s"],
+                        "intent": "保存",
+                        "dangerous": False,
+                    },
+                )
+
+        asyncio.run(call())
+        deadline = time.monotonic() + 5
+        text = ""
+        while time.monotonic() < deadline:
+            text = saved.read_text(encoding="utf-8")
+            if "computer-use-acceptance" in text:
+                break
+            time.sleep(0.2)
+        assert "computer-use-acceptance" in text
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "computer-use" / "actions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["tool"] for record in records] == [
+        "list_windows",
+        "declare_scope",
+        "observe_window",
+        "zoom",
+        "click",
+        "type_text",
+        "press_keys",
+    ]
+    assert all(record["outcome"] == "succeeded" for record in records)
+
+
 def test_server_能被_stdio_客户端连上并调用(notepad: subprocess.Popen[bytes]) -> None:
     """Claude Code 就是这样连上来的：拉起一个子进程，走 stdio 说 MCP。"""
 
