@@ -18,6 +18,7 @@ from computer_use.desktop import DesktopPort
 from computer_use.files import describe_change
 from computer_use.interception import refer_to_human
 from computer_use.pace import confirmation_reason
+from computer_use.powershell import describe_command
 
 
 def decide(desktop: DesktopPort, payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -89,6 +90,8 @@ def _describe(desktop: DesktopPort, tool: str, arguments: Mapping[str, Any]) -> 
         target = f"启动 {arguments.get('app')}"
     elif (change := describe_change(desktop, tool, arguments)) is not None:
         target = change
+    elif (command := describe_command(tool, arguments)) is not None:
+        target = command
     else:
         target = f"调用 {tool}，参数 {json.dumps(dict(arguments), ensure_ascii=False)}"
     return f"模型自述意图：「{intent}」；{target}。"

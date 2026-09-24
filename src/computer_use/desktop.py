@@ -84,6 +84,19 @@ class FileError(Exception):
     """文件操作没能完成；消息原样回给模型。"""
 
 
+class CommandError(Exception):
+    """PowerShell 没能启动，或没能在时限内结束。"""
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """一条 PowerShell 命令的输出。非零退出码也是结果，不是异常。"""
+
+    stdout: str
+    stderr: str
+    exit_code: int
+
+
 @dataclass(frozen=True)
 class DirEntry:
     """目录里的一个名字。`is_dir` 为真表示它自己也是目录。"""
@@ -241,6 +254,13 @@ class DesktopPort(Protocol):
 
     def list_dir(self, path: str) -> Sequence[DirEntry]:
         """列出目录的直接子项，按名字排序。路径不是目录时抛 `FileError`。"""
+        ...
+
+    def run_powershell(self, command: str) -> CommandResult:
+        """执行一条 PowerShell 命令，不加载配置文件。
+
+        返回标准输出、标准错误与退出码。进程起不来或超时抛 `CommandError`。
+        """
         ...
 
     def confirm(

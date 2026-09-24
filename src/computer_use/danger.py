@@ -103,6 +103,13 @@ def judge_call(tool: str, arguments: Mapping[str, Any]) -> Verdict:
         if tool == "delete_file" and arguments.get("permanent") is True:
             return Verdict(("永久删除须经人确认",))
         return Verdict((_FILE_REASONS[tool],))
+    if tool == "run_powershell":
+        from computer_use.powershell import judge_command
+
+        command = arguments.get("command")
+        if not isinstance(command, str):
+            return Verdict(("无法解析命令，无从确认只读",))
+        return judge_command(command)
     if tool not in INPUT_TOOLS:
         return Verdict()
     declared = arguments.get("dangerous")

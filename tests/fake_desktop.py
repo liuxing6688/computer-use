@@ -13,6 +13,8 @@ from computer_use.desktop import (
     Capture,
     Clipboard,
     ClipboardUnavailable,
+    CommandError,
+    CommandResult,
     DirEntry,
     FileError,
     ForegroundError,
@@ -89,6 +91,9 @@ class FakeDesktop:
         self._files = {_normalize_path(path): content for path, content in (files or {}).items()}
         self.recycled: list[str] = []
         self.deleted: list[str] = []
+        self.commands: list[str] = []
+        self.command_result = CommandResult(stdout="", stderr="", exit_code=0)
+        self.command_error: str | None = None
         self.focus_fails = False
         self.clipboard_read_fails = False
         self.clipboard_write_fails = False
@@ -296,6 +301,12 @@ class FakeDesktop:
             rest = key[len(prefix) + len(name) :]
             children[name] = rest != "" or content is None
         return tuple(DirEntry(name, is_dir) for name, is_dir in sorted(children.items()))
+
+    def run_powershell(self, command: str) -> CommandResult:
+        self.commands.append(command)
+        if self.command_error is not None:
+            raise CommandError(self.command_error)
+        return self.command_result
 
     def confirm(
         self, *, title: str, message: str, image: Image.Image | None, timeout: float

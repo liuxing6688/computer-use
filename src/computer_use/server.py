@@ -17,6 +17,7 @@ from computer_use.action_log import ActionLog, Intercepted
 from computer_use.actions import ActionError
 from computer_use.desktop import (
     ClipboardUnavailable,
+    CommandError,
     DesktopPort,
     FileError,
     ForegroundError,
@@ -57,6 +58,10 @@ INSTRUCTIONS = f"""\
 确认里能看到目标路径和变更类型，盖过已有文件时会写明是覆盖。
 `delete_file` 默认把文件移入回收站。永久删除要显式传入 `permanent: true`，
 确认理由会写成永久删除，不能靠同一次回收站确认改过去。
+`run_powershell` 执行一条 PowerShell 命令并返回标准输出、标准错误与退出码。
+只读命令直接执行。含写操作、下载或动态求值的命令一律要人确认；
+判定看整条命令，管道、分号、脚本块和子表达式里藏着的写操作也会被拦住。
+把 `dangerous` 报成 false 也不能让这类命令自己通过。
 """
 
 
@@ -227,6 +232,29 @@ def create_server(desktop: DesktopPort) -> FastMCP:
                     intent=intent,
                     dangerous=dangerous,
                     permanent=permanent,
+                ),
+            )
+        )
+
+    @mcp.tool
+    def run_powershell(command: str, intent: str, dangerous: bool) -> dict[str, Any]:
+        """执行一条 PowerShell 命令，返回标准输出、标准错误与退出码。
+
+        只读命令直接执行，无需确认。含写操作、下载或动态求值的命令须由人在 Claude Code 中确认；
+        判定解析整条命令，不看开头的动词。管道、分号、脚本块与子表达式中的写操作同样拦截。
+        不加载配置文件。60 秒内没有结束则报错。
+        `intent` 用一句话说明这次命令要做什么。命令原文记入动作日志，输出不记。
+        """
+
+        return _refusal_as_tool_error(
+            lambda: log.run(
+                tool="run_powershell",
+                target={"command": command},
+                intent=intent,
+                dangerous=dangerous,
+                evidence_window=None,
+                action=lambda: tools.run_powershell(
+                    desktop, command, intent=intent, dangerous=dangerous
                 ),
             )
         )
@@ -541,6 +569,7 @@ def _refusal_as_tool_error(call: Callable[[], T]) -> T:
         InjectionError,
         LaunchError,
         FileError,
+        CommandError,
     ) as error:
         raise ToolError(str(error)) from error
 

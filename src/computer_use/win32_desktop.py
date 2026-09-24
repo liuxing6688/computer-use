@@ -33,6 +33,8 @@ from computer_use.desktop import (
     Capture,
     Clipboard,
     ClipboardUnavailable,
+    CommandError,
+    CommandResult,
     DirEntry,
     FileError,
     ForegroundError,
@@ -471,6 +473,29 @@ class Win32Desktop:
         except OSError as error:
             raise FileError(f"不是目录：{path}") from error
         return tuple(sorted(entries, key=lambda entry: entry.name))
+
+    def run_powershell(self, command: str) -> CommandResult:
+        wrapped = (
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "$OutputEncoding = [Console]::OutputEncoding; "
+            + command
+        )
+        try:
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", wrapped],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise CommandError("PowerShell 在 60 秒内没有结束") from error
+        except OSError as error:
+            raise CommandError("PowerShell 没能启动") from error
+        return CommandResult(
+            stdout=completed.stdout.decode("utf-8", errors="replace"),
+            stderr=completed.stderr.decode("utf-8", errors="replace"),
+            exit_code=completed.returncode,
+        )
 
     def confirm(
         self, *, title: str, message: str, image: Image.Image | None, timeout: float

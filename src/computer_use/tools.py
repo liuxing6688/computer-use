@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from computer_use import actions, files, observation
+from computer_use import actions, files, observation, powershell
 from computer_use.desktop import DesktopPort, Rect, Window
 from computer_use.observation import Screenshot, Screenshots
 from computer_use.pace import Pace
@@ -99,6 +99,18 @@ def zoom(screenshots: Screenshots, screenshot_id: str, rect: Rect) -> Observed:
     """只读工具：把截图上的一块矩形按原尺寸放大，附带同样的元数据。"""
 
     return _as_observed(observation.zoom(screenshots, screenshot_id, rect))
+
+
+def run_powershell(
+    desktop: DesktopPort,
+    command: str,
+    *,
+    intent: str,
+    dangerous: bool,
+) -> dict[str, Any]:
+    """执行一条 PowerShell 命令并返回输出。只读直接执行；写操作、下载与动态求值须经人裁决。"""
+
+    return powershell.run_powershell(desktop, command, intent=intent, dangerous=dangerous)
 
 
 def declare_scope(
