@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Collection, Mapping, Sequence
 
@@ -21,6 +22,16 @@ from computer_use.desktop import (
     Window,
     WindowUnavailable,
 )
+
+
+@dataclass(frozen=True)
+class ShownDialog:
+    """测试替身记下的一次原生确认：人还没点，内容已经摆好。"""
+
+    title: str
+    message: str
+    image: Image.Image | None
+    timeout: float
 
 
 class FakeDesktop:
@@ -70,6 +81,8 @@ class FakeDesktop:
         self.pasted: list[object] = []
         self.characters: list[str] = []
         self.trace: list[tuple[object, ...]] = []
+        self.dialogs: list[ShownDialog] = []
+        self.dialog_reply: bool | None = True
         self.focus_fails = False
         self.clipboard_read_fails = False
         self.clipboard_write_fails = False
@@ -209,6 +222,12 @@ class FakeDesktop:
 
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         self.stop_hotkey = on_stop
+
+    def confirm(
+        self, *, title: str, message: str, image: Image.Image | None, timeout: float
+    ) -> bool | None:
+        self.dialogs.append(ShownDialog(title=title, message=message, image=image, timeout=timeout))
+        return self.dialog_reply
 
     def press_stop_hotkey(self) -> None:
         if self.stop_hotkey is None:

@@ -25,6 +25,22 @@ class TaskScope:
 
     def __init__(self) -> None:
         self._windows: tuple[Window, ...] = ()
+        self._entered: dict[int, str] = {}
+
+    def remember_text(self, handle: int, text: str) -> None:
+        """记下打进这个窗口的文本，供之后的发送类确认一并呈现。"""
+
+        self._entered[handle] = self._entered.get(handle, "") + text
+
+    def entered_text(self, handle: int) -> str:
+        """已经打进这个窗口、尚未随发送类确认清掉的文本。"""
+
+        return self._entered.get(handle, "")
+
+    def forget_text(self, handle: int) -> None:
+        """发送类确认已经把这段内容摆给人看过，下次从空的开始。"""
+
+        self._entered.pop(handle, None)
 
     @property
     def windows(self) -> tuple[Window, ...]:
@@ -44,7 +60,11 @@ class TaskScope:
                 f"窗口 {', '.join(map(str, missing))} 不存在或不可操作（不可见、最小化或无标题），"
                 "任务作用域未改变"
             )
-        self._windows = tuple(operable[h] for h in dict.fromkeys(handles))
+        chosen = tuple(operable[h] for h in dict.fromkeys(handles))
+        from computer_use.confirmation import confirm_scope_switch
+
+        confirm_scope_switch(desktop, self._windows, chosen)
+        self._windows = chosen
 
     def admit(self, desktop: DesktopPort, x: int, y: int) -> Window:
         """命中测试：屏幕物理像素 `(x, y)` 处的顶层窗口，它须在作用域内。

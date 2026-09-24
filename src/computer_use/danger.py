@@ -96,6 +96,12 @@ def judge_call(tool: str, arguments: Mapping[str, Any]) -> Verdict:
     return Verdict(("模型没有明确自报危险性（dangerous 须为 true 或 false）",))
 
 
+_OUTBOUND_CJK = ("发送", "提交", "发布", "支付", "付款", "转账", "购买", "下单")
+_OUTBOUND_LATIN = ("send", "submit", "publish", "pay", "transfer", "purchase", "buy")
+_SEND_WORDS = frozenset({"发送", "提交", "发布", "send", "submit", "publish"})
+"""外发里「把已经输入的内容发出去」的那一类：确认时要同时摆上截图和这段内容。"""
+
+
 def judge_nearby_text(text: str | None) -> Verdict:
     """凭落点附近读出的文字判定：含高危词即判为危险。`None` 表示没能读出来，同样判为危险。
 
@@ -104,12 +110,34 @@ def judge_nearby_text(text: str | None) -> Verdict:
 
     if text is None:
         return Verdict(("无法识别落点附近的文字，无从排除危险",))
+    return Verdict(tuple(f"落点附近有高危词「{w}」" for w in _matched(text, _CJK_WORDS, _LATIN_WORDS)))
+
+
+def outbound_hits(*texts: str | None) -> tuple[str, ...]:
+    """这些文字里指向外发动作的词，按出现顺序、去重。空串与 `None` 不命中。"""
+
+    found: list[str] = []
+    for text in texts:
+        if text is None:
+            continue
+        for word in _matched(text, _OUTBOUND_CJK, _OUTBOUND_LATIN):
+            if word not in found:
+                found.append(word)
+    return tuple(found)
+
+
+def sends_content(hits: tuple[str, ...]) -> bool:
+    """这些外发词里有没有「发出已输入内容」的那一类。"""
+
+    return any(word in _SEND_WORDS for word in hits)
+
+
+def _matched(text: str, cjk: tuple[str, ...], latin: tuple[str, ...]) -> tuple[str, ...]:
     compact = re.sub(r"\s+", "", text)
     lowered = text.lower()
-    hits = [w for w in _CJK_WORDS if w in compact] + [
-        w for w in _LATIN_WORDS if re.search(rf"\b{w}\b", lowered)
-    ]
-    return Verdict(tuple(f"落点附近有高危词「{w}」" for w in hits))
+    return tuple(w for w in cjk if w in compact) + tuple(
+        w for w in latin if re.search(rf"\b{w}\b", lowered)
+    )
 
 
 def read_nearby(desktop: DesktopPort, screenshot: Screenshot, x: int, y: int) -> str | None:

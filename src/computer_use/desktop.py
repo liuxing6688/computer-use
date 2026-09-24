@@ -206,3 +206,13 @@ class DesktopPort(Protocol):
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         """注册全局急停热键 Ctrl+Break。按下时调用 `on_stop`。重复注册只更换回调。"""
         ...
+
+    def confirm(
+        self, *, title: str, message: str, image: Image | None, timeout: float
+    ) -> bool | None:
+        """弹出系统原生确认对话框，模型无法参与。
+
+        人点允许返回 `True`，点拒绝或关掉窗口返回 `False`，
+        `timeout` 秒内没有回应返回 `None`。`image` 是要一并呈现的窗口截图，没有时为 `None`。
+        """
+        ...

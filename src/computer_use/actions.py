@@ -9,8 +9,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Mapping, Sequence
 
-from computer_use.danger import Verdict, judge_call, judge_nearby_text, read_nearby
 from computer_use.action_log import Intercepted
+from computer_use.confirmation import confirm_outbound
+from computer_use.danger import Verdict, judge_call, judge_nearby_text, read_nearby
 from computer_use.desktop import Clipboard, ClipboardUnavailable, DesktopPort, Window
 from computer_use.interception import require_ruling
 from computer_use.observation import Screenshots, confirm_unchanged
@@ -240,6 +241,7 @@ def press_keys(
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "press_keys", arguments, verdict)
+    confirm_outbound(desktop, scope, intent=intent, nearby=None, window=window)
     gate.wait_to_inject(cleared=cleared)
     try:
         desktop.focus(window.handle)
@@ -353,6 +355,7 @@ def type_text(
         gate.abandon()
         raise
     gate.mark_injected()
+    scope.remember_text(window.handle, text)
     return Typed(window=window, tier=tier, clipboard_used=clipboard_used)
 
 
@@ -388,13 +391,19 @@ def _prepare_points(
     screen = [screenshot.to_screen(x, y) for x, y in points]
     windows = [scope.admit(desktop, x, y) for x, y in screen]
     confirm_unchanged(desktop, screenshot, screen[0][0], screen[0][1], windows[0])
-    verdict = judge_call(tool, arguments) | judge_nearby_text(
-        read_nearby(desktop, screenshot, screen[0][0], screen[0][1])
-    )
+    nearby = read_nearby(desktop, screenshot, screen[0][0], screen[0][1])
+    verdict = judge_call(tool, arguments) | judge_nearby_text(nearby)
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, tool, arguments, verdict)
+    confirm_outbound(
+        desktop,
+        scope,
+        intent=str(arguments.get("intent") or ""),
+        nearby=nearby,
+        window=windows[0],
+    )
     gate.wait_to_inject(cleared=cleared)
     landed = [
         Landed(window=window, x=x, y=y) for window, (x, y) in zip(windows, screen, strict=True)

@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -15,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Collection, Sequence, TypeGuard, TypeVar
+from typing import Any, Collection, Sequence, TypeGuard, TypeVar, cast
 
 import win32clipboard
 import win32con
@@ -92,6 +93,14 @@ _user32.keybd_event.argtypes = (wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ct
 _user32.keybd_event.restype = None
 _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 _kernel32.GetCurrentThreadId.argtypes = ()
+_kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+_kernel32.GetModuleHandleW.argtypes = (wintypes.LPCWSTR,)
+_user32.GetSystemMetrics.restype = ctypes.c_int
+_user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
+_user32.SetTimer.restype = ctypes.c_size_t
+_user32.SetTimer.argtypes = (wintypes.HWND, ctypes.c_size_t, wintypes.UINT, ctypes.c_void_p)
+_user32.LoadCursorW.restype = wintypes.HANDLE
+_user32.LoadCursorW.argtypes = (wintypes.HANDLE, wintypes.LPCWSTR)
 
 
 class _MOUSEINPUT(ctypes.Structure):
@@ -417,6 +426,11 @@ class Win32Desktop:
 
     def register_stop_hotkey(self, on_stop: Callable[[], None]) -> None:
         _StopHotkey.install(on_stop)
+
+    def confirm(
+        self, *, title: str, message: str, image: Image.Image | None, timeout: float
+    ) -> bool | None:
+        return _native_confirm(title, message, image, timeout)
 
 
 class _StopHotkey:
@@ -855,3 +869,202 @@ def _process_name(process_id: int) -> str:
         return path.value.rsplit("\\", 1)[-1]
     finally:
         _kernel32.CloseHandle(process)
+
+
+_ALLOW = 1
+_DENY = 2
+_CONFIRM_CLASS = "ComputerUseConfirm"
+_confirm_wndproc: Callable[[int, int, int, int], int] | None = None
+_translate_message = cast(Callable[[object], None], win32gui.TranslateMessage)
+_dispatch_message = cast(Callable[[object], None], win32gui.DispatchMessage)
+
+
+class _DialogOutcome:
+    """一次原生确认还没结束时的答复。超时把 `reply` 留成 `None`。"""
+
+    def __init__(self) -> None:
+        self.reply: bool | None = None
+        self.done = False
+
+
+_confirm_state: dict[int, _DialogOutcome] = {}
+
+
+def _native_confirm(title: str, message: str, image: Image.Image | None, timeout: float) -> bool | None:
+    """顶层系统窗口：允许 / 拒绝，到时无人理则按超时。调用期间模型还停在这次工具调用里。"""
+
+    hinst = _kernel32.GetModuleHandleW(None)
+    _ensure_confirm_class(hinst)
+    bitmap, image_size = _confirm_bitmap(image)
+    width = 520
+    text_height = 160
+    image_height = image_size[1] if image_size is not None else 0
+    gap = 12 if image_height else 0
+    button_top = 16 + text_height + gap + image_height + 12
+    height = button_top + 32 + 16 + 40
+    screen_w = _user32.GetSystemMetrics(win32con.SM_CXSCREEN)
+    screen_h = _user32.GetSystemMetrics(win32con.SM_CYSCREEN)
+    hwnd = win32gui.CreateWindowEx(
+        win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME,
+        _CONFIRM_CLASS,
+        title,
+        win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_SYSMENU | win32con.WS_VISIBLE,
+        max(0, (screen_w - width) // 2),
+        max(0, (screen_h - height) // 2),
+        width,
+        height,
+        0,
+        0,
+        hinst,
+        None,
+    )
+    state = _DialogOutcome()
+    _confirm_state[hwnd] = state
+    edit = win32gui.CreateWindow(
+        "EDIT",
+        message,
+        win32con.WS_CHILD
+        | win32con.WS_VISIBLE
+        | win32con.WS_VSCROLL
+        | win32con.ES_MULTILINE
+        | win32con.ES_READONLY
+        | win32con.ES_AUTOVSCROLL,
+        16,
+        16,
+        width - 32,
+        text_height,
+        hwnd,
+        0,
+        hinst,
+        None,
+    )
+    win32gui.SendMessage(edit, win32con.EM_SETSEL, 0, 0)
+    if bitmap is not None and image_size is not None:
+        static = win32gui.CreateWindow(
+            "STATIC",
+            "",
+            win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.SS_BITMAP,
+            16,
+            16 + text_height + gap,
+            image_size[0],
+            image_size[1],
+            hwnd,
+            0,
+            hinst,
+            None,
+        )
+        win32gui.SendMessage(static, win32con.STM_SETIMAGE, win32con.IMAGE_BITMAP, bitmap)
+    deny = win32gui.CreateWindow(
+        "BUTTON",
+        "拒绝",
+        win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.WS_TABSTOP | win32con.BS_DEFPUSHBUTTON,
+        width - 16 - 80 - 12 - 80,
+        button_top,
+        80,
+        28,
+        hwnd,
+        _DENY,
+        hinst,
+        None,
+    )
+    win32gui.CreateWindow(
+        "BUTTON",
+        "允许",
+        win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.WS_TABSTOP,
+        width - 16 - 80,
+        button_top,
+        80,
+        28,
+        hwnd,
+        _ALLOW,
+        hinst,
+        None,
+    )
+    win32gui.SetFocus(deny)
+    win32gui.SetWindowPos(
+        hwnd,
+        win32con.HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+    )
+    win32gui.SetForegroundWindow(hwnd)
+    _user32.SetTimer(hwnd, 1, max(1, int(timeout * 1000)), None)
+    try:
+        while not state.done:
+            code, msg = win32gui.GetMessage(0, 0, 0)
+            if code == 0 or code == -1:
+                break
+            _translate_message(msg)
+            _dispatch_message(msg)
+    finally:
+        _confirm_state.pop(hwnd, None)
+        if bitmap is not None:
+            win32gui.DeleteObject(bitmap)
+    return state.reply
+
+
+def _ensure_confirm_class(hinst: int) -> None:
+    global _confirm_wndproc
+    if _confirm_wndproc is not None:
+        return
+    window_class: Any = win32gui.WNDCLASS()
+    window_class.hInstance = hinst
+    window_class.lpszClassName = _CONFIRM_CLASS
+    _confirm_wndproc = _confirm_window_proc
+    window_class.lpfnWndProc = _confirm_wndproc
+    window_class.hbrBackground = win32con.COLOR_WINDOW + 1
+    window_class.hCursor = _user32.LoadCursorW(None, ctypes.cast(32512, wintypes.LPCWSTR))
+    try:
+        win32gui.RegisterClass(window_class)
+    except win32gui.error:
+        pass
+
+
+def _confirm_window_proc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+    state = _confirm_state.get(hwnd)
+    if msg == win32con.WM_COMMAND and state is not None:
+        command = wparam & 0xFFFF
+        if command == _ALLOW:
+            state.reply = True
+            win32gui.DestroyWindow(hwnd)
+            return 0
+        if command == _DENY:
+            state.reply = False
+            win32gui.DestroyWindow(hwnd)
+            return 0
+    if msg == win32con.WM_TIMER and state is not None:
+        state.reply = None
+        win32gui.DestroyWindow(hwnd)
+        return 0
+    if msg == win32con.WM_CLOSE and state is not None:
+        state.reply = False
+        win32gui.DestroyWindow(hwnd)
+        return 0
+    if msg == win32con.WM_DESTROY and state is not None:
+        state.done = True
+        return 0
+    return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+
+def _confirm_bitmap(image: Image.Image | None) -> tuple[Any, tuple[int, int]] | tuple[None, None]:
+    if image is None:
+        return None, None
+    fitted = image.convert("RGB")
+    fitted.thumbnail((480, 280))
+    fd, name = tempfile.mkstemp(suffix=".bmp")
+    os.close(fd)
+    try:
+        fitted.save(name, format="BMP")
+        handle: Any = win32gui.LoadImage(
+            0, name, win32con.IMAGE_BITMAP, 0, 0, win32con.LR_LOADFROMFILE
+        )
+    except (OSError, win32gui.error):
+        return None, None
+    finally:
+        Path(name).unlink(missing_ok=True)
+    if not handle:
+        return None, None
+    return handle, fitted.size
