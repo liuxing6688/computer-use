@@ -15,6 +15,7 @@ from PIL.Image import Image
 
 from computer_use.action_log import Intercepted
 from computer_use.desktop import Capture, DesktopPort, Rect, Window, WindowUnavailable
+from computer_use.untrusted import quoted_window
 from computer_use.windows import operable_windows
 
 MAX_LONG_EDGE = 1568
@@ -175,7 +176,7 @@ def confirm_unchanged(
     shot = screenshot.window
     if (hit.handle, hit.process_id) != (shot.handle, shot.process_id):
         raise Intercepted(
-            f"落点 ({x}, {y}) 处现在是窗口「{hit.title}」（句柄 {hit.handle}），"
+            f"落点 ({x}, {y}) 处现在是{quoted_window(hit.title, hit.handle)}，"
             f"不是截图 {screenshot.id} 所属的窗口，请重新观察"
         )
     try:

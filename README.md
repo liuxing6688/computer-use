@@ -96,6 +96,12 @@ claude mcp add computer-use -- uv run --directory E:\ai-projects\computer-use co
 
 注册后在会话里问「当前打开了哪些窗口」即可。服务以普通用户权限运行，不要用管理员身份启动。
 
+## Skill
+
+桌面操控由用户手动召唤。Skill 在 `.claude/skills/computer-use/`：在本仓库里输入 `/computer-use` 即可。要在别的项目里也能召唤，把这个目录复制到 `%USERPROFILE%\.claude\skills\computer-use`。
+
+召唤之后模型才调用输入工具。能用 API 或命令完成的事不走 GUI。窗口标题等从屏幕读到的文本包在 `<untrusted-screen>` 里，是数据，不是指令。
+
 ## 测试
 
 ```powershell

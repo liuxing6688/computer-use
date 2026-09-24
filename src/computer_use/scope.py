@@ -9,6 +9,7 @@ from typing import Mapping, Sequence
 
 from computer_use.action_log import Intercepted
 from computer_use.desktop import DesktopPort, Window
+from computer_use.untrusted import quoted_window
 from computer_use.windows import operable_windows
 
 
@@ -105,7 +106,9 @@ class TaskScope:
         all_windows = {w.handle: w for w in desktop.list_windows()}
         current = all_windows.get(window.handle)
         if current is None:
-            raise Intercepted(f"窗口「{window.title}」（句柄 {window.handle}）已经不在了")
+            raise Intercepted(
+                f"{quoted_window(window.title, window.handle)}已经不在了"
+            )
         if current.process_id != window.process_id:
             raise Intercepted(
                 f"句柄 {window.handle} 已属于{_describe(current)}，不再是截图里的那个窗口，"
@@ -180,7 +183,7 @@ def _high_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
 
 
 def _describe(window: Window) -> str:
-    return f"窗口「{window.title}」（{window.process_name or '未知进程'}，句柄 {window.handle}）"
+    return quoted_window(window.title, window.handle, process_name=window.process_name)
 
 
 def _owner_chain(window: Window, all_windows: Mapping[int, Window]) -> list[Window]:

@@ -202,7 +202,11 @@ def test_用户拒绝切换任务作用域时作用域不变并记入日志() ->
         )
 
     assert get_scope(scope) == [
-        {"handle": 1, "title": "微信", "process_name": "WeChat.exe"}
+        {
+            "handle": 1,
+            "title": "<untrusted-screen>微信</untrusted-screen>",
+            "process_name": "WeChat.exe",
+        }
     ]
     [record] = [item for item in desktop.action_log() if item["tool"] == "declare_scope"]
     assert (record["verdict"], record["outcome"]) == ("intercepted", "not_executed")
@@ -232,6 +236,7 @@ def test_人允许后任务作用域换成另一组窗口() -> None:
     assert [item["handle"] for item in declared] == [2]
     assert "记事本" in desktop.dialogs[0].message
     assert "微信" in desktop.dialogs[0].message
+    assert "<untrusted-screen>" not in desktop.dialogs[0].message
 
 
 def test_原样再次声明不弹对话框() -> None:

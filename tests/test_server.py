@@ -43,7 +43,7 @@ def test_列出窗口可经由_MCP_调用() -> None:
     assert result.data == [
         {
             "handle": 0x1234,
-            "title": "无标题 - 记事本",
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
             "process_name": "notepad.exe",
             "rect": {"left": 100, "top": 50, "width": 800, "height": 600},
         }
@@ -165,7 +165,13 @@ def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入�
 
     scope, clicked, screenshot_id, refusal = asyncio.run(call())
 
-    assert scope == [{"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"}]
+    assert scope == [
+        {
+            "handle": 1,
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+            "process_name": "notepad.exe",
+        }
+    ]
     assert clicked["screen_point"] == {"x": 200, "y": 150}
     assert desktop.clicks == [(200, 150)]
     declared_record, _, _, refused_record, clicked_record = desktop.action_log()

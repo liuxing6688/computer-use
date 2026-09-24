@@ -45,7 +45,11 @@ def test_中文经剪贴板粘贴进焦点输入框_原剪贴板内容被恢复(
     )
 
     assert result == {
-        "window": {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
+        "window": {
+            "handle": 1,
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+            "process_name": "notepad.exe",
+        },
         "tier": "clipboard",
         "clipboard_used": True,
     }
@@ -255,7 +259,7 @@ def test_作用域内窗口弹出的对话框可以输入() -> None:
         dangerous=False,
     )
 
-    assert result["window"]["title"] == "另存为"
+    assert result["window"]["title"] == "<untrusted-screen>另存为</untrusted-screen>"
     assert desktop.pasted == ["报告.docx"]
     assert desktop.trace[0] == ("focus", 2)
 
@@ -354,7 +358,11 @@ def test_文本输入可经由_MCP_调用_日志不记下文本本身() -> None:
     result = asyncio.run(_type_via_mcp(desktop))
 
     assert result == {
-        "window": {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
+        "window": {
+            "handle": 1,
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+            "process_name": "notepad.exe",
+        },
         "tier": "clipboard",
         "clipboard_used": True,
     }

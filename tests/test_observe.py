@@ -63,7 +63,7 @@ def test_观察附带窗口标识_采集时刻_缩放比_屏幕偏移与截图_I
     assert metadata == {
         "window": {
             "handle": 0x1234,
-            "title": "无标题 - 记事本",
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
             "process_name": "notepad.exe",
         },
         "size": {"width": 320, "height": 240},

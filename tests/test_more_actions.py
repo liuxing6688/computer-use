@@ -283,7 +283,11 @@ def test_启动应用后等到它的新窗口_作用域不变() -> None:
 
     assert desktop.launched == ["notepad.exe"]
     assert result == {
-        "window": {"handle": 9, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
+        "window": {
+            "handle": 9,
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+            "process_name": "notepad.exe",
+        },
         "process_id": 4242,
     }
     assert get_scope(scope) == []
@@ -337,7 +341,7 @@ def test_超时错误点名期间新出现的不相干窗口() -> None:
         )
 
     message = str(error.value)
-    assert "弹出的广告" in message
+    assert "<untrusted-screen>弹出的广告</untrusted-screen>" in message
     assert "ad.exe" in message
     assert desktop.launched == ["notepad.exe"]
 
@@ -489,7 +493,11 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
             )
             scope = await client.call_tool("get_scope", {})
             assert scope.data == [
-                {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"}
+                {
+                    "handle": 1,
+                    "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+                    "process_name": "notepad.exe",
+                }
             ]
             return dict(clicked.data), str(refused.value), dict(launched.data)
 

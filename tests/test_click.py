@@ -44,8 +44,8 @@ def test_声明的任务作用域可被查询() -> None:
     declared = declare_scope(desktop, scope, [1, 2])
 
     expected = [
-        {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
-        {"handle": 2, "title": "计算器", "process_name": "CalculatorApp.exe"},
+        {"handle": 1, "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>", "process_name": "notepad.exe"},
+        {"handle": 2, "title": "<untrusted-screen>计算器</untrusted-screen>", "process_name": "CalculatorApp.exe"},
     ]
     assert declared == expected
     assert get_scope(scope) == expected
@@ -103,7 +103,11 @@ def test_点击作用域内的窗口_按截图像素坐标落到屏幕上() -> N
 
     assert desktop.clicks == [(510, 220)]
     assert result == {
-        "window": {"handle": 1, "title": "无标题 - 记事本", "process_name": "notepad.exe"},
+        "window": {
+            "handle": 1,
+            "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+            "process_name": "notepad.exe",
+        },
         "screen_point": {"x": 510, "y": 220},
     }
 
@@ -170,7 +174,7 @@ def test_落点被作用域外的窗口挡住时点击被拦截_理由指明落�
     with pytest.raises(Intercepted, match="任务作用域之外") as intercepted:
         click(desktop, screenshots, scope, screenshot_id, 50, 50)
 
-    assert "弹出的广告" in str(intercepted.value)
+    assert "<untrusted-screen>弹出的广告</untrusted-screen>" in str(intercepted.value)
     assert desktop.clicks == []
     click(desktop, screenshots, scope, screenshot_id, 200, 200)
     assert desktop.clicks == [(200, 200)]
@@ -226,7 +230,7 @@ def test_作用域内窗口弹出的对话框也在作用域内() -> None:
     result = click(desktop, screenshots, scope, _observed(desktop, screenshots, 2), 10, 10)
 
     assert desktop.clicks == [(110, 110)]
-    assert result["window"]["title"] == "另存为"
+    assert result["window"]["title"] == "<untrusted-screen>另存为</untrusted-screen>"
 
 
 @pytest.mark.parametrize(

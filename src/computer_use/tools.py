@@ -15,6 +15,7 @@ from computer_use.desktop import DesktopPort, Rect, Window
 from computer_use.observation import Screenshot, Screenshots
 from computer_use.pace import Pace
 from computer_use.scope import TaskScope
+from computer_use.untrusted import wrap_untrusted
 from computer_use.windows import operable_windows
 
 
@@ -335,7 +336,7 @@ def _as_landed(landed: actions.Landed) -> dict[str, Any]:
 def _as_identity(window: Window) -> dict[str, Any]:
     return {
         "handle": window.handle,
-        "title": window.title,
+        "title": wrap_untrusted(window.title),
         "process_name": window.process_name,
     }
 
@@ -361,9 +362,7 @@ def _as_observed(screenshot: Screenshot) -> Observed:
 
 def _as_payload(window: Window) -> dict[str, Any]:
     return {
-        "handle": window.handle,
-        "title": window.title,
-        "process_name": window.process_name,
+        **_as_identity(window),
         "rect": {
             "left": window.rect.left,
             "top": window.rect.top,

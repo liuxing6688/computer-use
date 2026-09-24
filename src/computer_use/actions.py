@@ -17,6 +17,7 @@ from computer_use.interception import require_ruling
 from computer_use.observation import Screenshots, confirm_unchanged
 from computer_use.pace import Pace, budget_verdict
 from computer_use.scope import TaskScope, risk_of_process
+from computer_use.untrusted import quoted_window
 from computer_use.windows import operable_windows
 
 
@@ -542,7 +543,7 @@ def _timeout_message(
 ) -> str:
     if appeared:
         listed = "、".join(
-            f"窗口「{w.title}」（{w.process_name or '未知进程'}，句柄 {w.handle}）" for w in appeared
+            quoted_window(w.title, w.handle, process_name=w.process_name) for w in appeared
         )
         extra = f"期间新出现的窗口：{listed}。"
     else:
