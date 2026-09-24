@@ -343,7 +343,7 @@ def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全�
                     },
                 )
                 zoom_size = zoomed.data["size"]
-                await client.call_tool(
+                clicked = await client.call_tool(
                     "click",
                     {
                         "screenshot_id": zoomed.data["screenshot_id"],
@@ -353,6 +353,11 @@ def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全�
                         "dangerous": False,
                     },
                 )
+                assert clicked.data["window"]["handle"] == window["handle"]
+                point = clicked.data["screen_point"]
+                rect = window["rect"]
+                assert rect["left"] <= point["x"] <= rect["left"] + rect["width"]
+                assert rect["top"] <= point["y"] <= rect["top"] + rect["height"]
                 await client.call_tool(
                     "type_text",
                     {
