@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from computer_use.confirmation import confirm_permanent_delete
 from computer_use.danger import judge_call
 from computer_use.desktop import DesktopPort
 from computer_use.interception import require_ruling
@@ -87,7 +86,5 @@ def delete_file(
     if permanent is not None:
         arguments["permanent"] = permanent
     require_ruling(desktop, "delete_file", arguments, judge_call("delete_file", arguments))
-    if permanent is True:
-        confirm_permanent_delete(desktop, path)
     desktop.delete_path(path, permanent=permanent is True)
     return {"path": path, "permanent": permanent is True}

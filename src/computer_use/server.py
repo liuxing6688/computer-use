@@ -56,7 +56,7 @@ INSTRUCTIONS = f"""\
 `write_file`、`move_file`、`delete_file` 一律要由人在 Claude Code 里确认后才执行；
 确认里能看到目标路径和变更类型，盖过已有文件时会写明是覆盖。
 `delete_file` 默认把文件移入回收站。永久删除要显式传入 `permanent: true`，
-那一次在确认之后还会弹出系统对话框，人拒绝或超时都不删除。
+确认理由会写成永久删除，不能靠同一次回收站确认改过去。
 """
 
 
@@ -209,8 +209,8 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         """删除文件或目录。默认移入回收站。
 
         一律须经人确认，确认信息含目标路径与变更类型。
-        `permanent` 为 true 时改为永久删除：这一次在 Claude Code 的确认之后还会弹出系统对话框，
-        人拒绝或超时都不删除。省略 `permanent` 就是移入回收站，不能靠改这个参数复用同一次确认。
+        `permanent` 为 true 时改为永久删除，确认理由与移入回收站不同，须单独经人确认。
+        省略 `permanent` 就是移入回收站，不能靠改这个参数复用同一次确认。
         `intent` 用一句话说明这次删除要做什么。
         """
 

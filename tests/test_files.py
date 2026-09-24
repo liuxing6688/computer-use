@@ -192,44 +192,27 @@ def test_移入回收站的裁决不能改成永久删除() -> None:
     assert desktop.deleted == []
 
 
-def test_永久删除被拒绝时文件还在_确认写明路径且不进回收站() -> None:
+def test_永久删除须显式请求_确认写明永久删除且不弹原生对话框() -> None:
     desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
-    desktop.dialog_reply = False
     arguments: dict[str, Any] = {
         "path": "E:/notes/a.txt",
         "permanent": True,
         "intent": "抹掉这份草稿",
         "dangerous": True,
     }
-    decide(desktop, _payload(arguments, tool="delete_file"))
 
-    with pytest.raises(Intercepted, match="拒绝"):
-        delete_file(desktop, **arguments)
+    output = decide(desktop, _payload(arguments, tool="delete_file"))
 
-    assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
+    assert output is not None
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "E:/notes/a.txt" in reason
+    assert "永久删除" in reason
+    delete_file(desktop, **arguments)
+    with pytest.raises(FileError):
+        read_file(desktop, "E:/notes/a.txt")
+    assert desktop.deleted == ["E:/notes/a.txt"]
     assert desktop.recycled == []
-    assert desktop.deleted == []
-    [dialog] = desktop.dialogs
-    assert "E:/notes/a.txt" in dialog.message
-    assert "永久删除" in dialog.message
-
-
-def test_永久删除超时按拒绝处理_文件还在() -> None:
-    desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
-    desktop.dialog_reply = None
-    arguments: dict[str, Any] = {
-        "path": "E:/notes/a.txt",
-        "permanent": True,
-        "intent": "抹掉这份草稿",
-        "dangerous": True,
-    }
-    decide(desktop, _payload(arguments, tool="delete_file"))
-
-    with pytest.raises(Intercepted, match="超时"):
-        delete_file(desktop, **arguments)
-
-    assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
-    assert desktop.deleted == []
+    assert desktop.dialogs == []
 
 
 def test_文件工具经由_MCP_共用拦截与日志_内容不写入日志() -> None:
