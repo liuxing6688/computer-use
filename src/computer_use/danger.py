@@ -156,6 +156,16 @@ def outbound_hits(*texts: str | None) -> tuple[str, ...]:
     return tuple(found)
 
 
+def nearby_risk_outside_outbound(text: str | None) -> tuple[str, ...]:
+    """落点附近的高危词里，外发确认不会再问的那些。
+
+    外发词留给 `outbound_hits`。`None` 表示没能读出来，没有词。
+    """
+
+    covered = set(outbound_hits(text))
+    return tuple(word for word in nearby_risk_words(text) if word not in covered)
+
+
 def sends_content(hits: tuple[str, ...]) -> bool:
     """这些外发词里有没有「发出已输入内容」的那一类。"""
 

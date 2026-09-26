@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PIL.Image import Image
 
 from computer_use.action_log import Intercepted
-from computer_use.danger import nearby_risk_words, outbound_hits, sends_content
+from computer_use.danger import nearby_risk_outside_outbound, outbound_hits, sends_content
 from computer_use.desktop import DesktopPort, Window, WindowUnavailable
 from computer_use.scope import TaskScope
 
@@ -18,21 +20,22 @@ CONFIRM_TIMEOUT = 60.0
 """人要看截图和已输入的内容，给一分钟。过了按拒绝。"""
 
 
-def confirm_nearby_words(
-    desktop: DesktopPort,
-    *,
-    intent: str,
-    nearby: str | None,
-    window: Window,
-) -> None:
-    """模型自报不危险、落点附近却有高危词时，同一次调用里弹原生对话框。
+@dataclass(frozen=True)
+class ConfirmSubject:
+    """一次原生确认要摆给人的落点：意图、附近读到的字、窗口。"""
 
-    外发词由 `confirm_outbound` 问，这里不重复问。附近没有这类词时不弹。
-    人拒绝或超时抛 `Intercepted`，动作不得执行。
+    intent: str
+    nearby: str | None
+    window: Window
+
+
+def confirm_nearby_risk_outside_outbound(desktop: DesktopPort, spot: ConfirmSubject) -> None:
+    """模型自报不危险、落点附近有高危词、且外发确认不会问这些词时，同一次调用里弹原生对话框。
+
+    外发词由 `confirm_outbound` 问。没有这类词时不弹。人拒绝或超时抛 `Intercepted`，动作不得执行。
     """
 
-    covered = set(outbound_hits(nearby))
-    words = tuple(word for word in nearby_risk_words(nearby) if word not in covered)
+    words = nearby_risk_outside_outbound(spot.nearby)
     if not words:
         return
     listed = "、".join(words)
@@ -41,8 +44,8 @@ def confirm_nearby_words(
         title="高危词需要确认",
         message=(
             f"落点附近读到高危词（{listed}）。\n"
-            f"意图：{intent}\n"
-            f"窗口：「{window.title}」（{window.process_name or '未知进程'}，句柄 {window.handle}）\n"
+            f"意图：{spot.intent}\n"
+            f"窗口：{_window_label(spot.window)}\n"
             "拒绝或超时则不执行。"
         ),
         image=None,
@@ -51,32 +54,25 @@ def confirm_nearby_words(
     )
 
 
-def confirm_outbound(
-    desktop: DesktopPort,
-    scope: TaskScope,
-    *,
-    intent: str,
-    nearby: str | None,
-    window: Window,
-) -> None:
+def confirm_outbound(desktop: DesktopPort, scope: TaskScope, spot: ConfirmSubject) -> None:
     """落点附近或意图指向外发时，执行前弹原生对话框。人拒绝或超时抛 `Intercepted`。
 
     发送类同时摆上当前窗口截图和已经打进这个窗口的文本。
     """
 
-    hits = outbound_hits(intent, nearby)
+    hits = outbound_hits(spot.intent, spot.nearby)
     if not hits:
         return
     image = None
     entered = ""
     if sends_content(hits):
-        entered = scope.entered_text(window.handle)
-        image = _current_image(desktop, window)
+        entered = scope.entered_text(spot.window.handle)
+        image = _current_image(desktop, spot.window)
     words = "、".join(hits)
     message = (
         f"即将执行外发动作（{words}）。\n"
-        f"意图：{intent}\n"
-        f"窗口：「{window.title}」（{window.process_name or '未知进程'}，句柄 {window.handle}）"
+        f"意图：{spot.intent}\n"
+        f"窗口：{_window_label(spot.window)}"
     )
     if sends_content(hits):
         message += f"\n已输入的内容：\n{entered or '（无）'}"
@@ -89,7 +85,7 @@ def confirm_outbound(
         timed_out="确认对话框超时，按拒绝处理，外发动作未执行",
     )
     if sends_content(hits):
-        scope.forget_text(window.handle)
+        scope.forget_text(spot.window.handle)
 
 
 def confirm_permanent_delete(desktop: DesktopPort, path: str) -> None:
@@ -158,7 +154,9 @@ def _current_image(desktop: DesktopPort, window: Window) -> Image | None:
         return None
 
 
+def _window_label(window: Window) -> str:
+    return f"「{window.title}」（{window.process_name or '未知进程'}，句柄 {window.handle}）"
+
+
 def _list(windows: tuple[Window, ...]) -> str:
-    return "\n".join(
-        f"窗口「{w.title}」（{w.process_name or '未知进程'}，句柄 {w.handle}）" for w in windows
-    )
+    return "\n".join(f"窗口{_window_label(window)}" for window in windows)

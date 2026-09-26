@@ -19,6 +19,7 @@ from computer_use.hook import decide
 from computer_use.server import create_server
 
 from .fake_desktop import FakeDesktop, window
+from .support import assert_no_retry_instruction
 
 
 def test_列出窗口可经由_MCP_调用() -> None:
@@ -227,8 +228,7 @@ def test_未自报的高危词在同一次调用里问人_自报为危险仍须�
     refusals = asyncio.run(call())
 
     assert "拒绝" in refusals[0]
-    assert "重新调用" not in refusals[0]
-    assert "dangerous" not in refusals[0]
+    assert_no_retry_instruction(refusals[0])
     [dialog] = desktop.dialogs
     assert "删除" in dialog.message
     assert "confirmed" in refusals[2]

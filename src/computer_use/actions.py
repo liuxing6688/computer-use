@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 from computer_use.action_log import Intercepted
-from computer_use.confirmation import confirm_nearby_words, confirm_outbound
+from computer_use.confirmation import (
+    ConfirmSubject,
+    confirm_nearby_risk_outside_outbound,
+    confirm_outbound,
+)
 from computer_use.danger import Verdict, judge_call, judge_nearby_text, read_nearby
 from computer_use.desktop import Clipboard, ClipboardUnavailable, DesktopPort, Window
 from computer_use.interception import require_ruling
@@ -273,7 +277,7 @@ def press_keys(
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "press_keys", arguments, verdict)
-    confirm_outbound(desktop, scope, intent=intent, nearby=None, window=window)
+    confirm_outbound(desktop, scope, ConfirmSubject(intent=intent, nearby=None, window=window))
     gate.wait_to_inject(cleared=cleared)
     before = _before(desktop)
     try:
@@ -441,20 +445,14 @@ def _prepare_points(
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, tool, arguments, verdict)
-    if arguments.get("dangerous") is False:
-        confirm_nearby_words(
-            desktop,
-            intent=str(arguments.get("intent") or ""),
-            nearby=nearby,
-            window=windows[0],
-        )
-    confirm_outbound(
-        desktop,
-        scope,
+    spot = ConfirmSubject(
         intent=str(arguments.get("intent") or ""),
         nearby=nearby,
         window=windows[0],
     )
+    if arguments.get("dangerous") is False:
+        confirm_nearby_risk_outside_outbound(desktop, spot)
+    confirm_outbound(desktop, scope, spot)
     gate.wait_to_inject(cleared=cleared)
     landed = [
         Landed(window=window, x=x, y=y) for window, (x, y) in zip(windows, screen, strict=True)

@@ -34,6 +34,8 @@ from computer_use.server import create_server
 from computer_use.tools import list_windows, observe_window
 from computer_use.win32_desktop import Win32Desktop
 
+from .support import assert_no_retry_instruction
+
 pytestmark = pytest.mark.realdesktop
 
 
@@ -248,8 +250,7 @@ def test_点在写着高危词的地方_真实_OCR_在同一次调用里问人_�
     if failed:
         raise failed[0]
     assert "删除" in asked["text"]
-    assert "重新调用" not in asked["text"]
-    assert "dangerous" not in asked["text"]
+    assert_no_retry_instruction(asked["text"])
     assert clicked["window"]["handle"] == hwnd
     tickets = tmp_path / "computer-use" / "tickets"
     assert not tickets.exists() or list(tickets.iterdir()) == []

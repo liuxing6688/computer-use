@@ -27,6 +27,7 @@ from computer_use.server import INSTRUCTIONS, create_server
 from computer_use.tools import click, declare_scope, observe_window
 
 from .fake_desktop import FakeDesktop, window
+from .support import assert_no_retry_instruction
 
 # ---- 判定：模型自报（hook 与服务端共用） ----
 
@@ -160,9 +161,7 @@ def test_人拒绝高危词确认时不点击_也不要求改标志重试() -> N
     with pytest.raises(Intercepted, match="拒绝") as intercepted:
         click(desktop, screenshots, scope, screenshot_id, 630, 412, intent="点这一行", dangerous=False)
 
-    message = str(intercepted.value)
-    assert "重新调用" not in message
-    assert "dangerous" not in message
+    assert_no_retry_instruction(str(intercepted.value))
     assert desktop.clicks == []
     assert len(desktop.dialogs) == 1
 
@@ -177,8 +176,7 @@ def test_高危词确认超时按拒绝处理且不点击() -> None:
 
     message = str(intercepted.value)
     assert "拒绝" in message
-    assert "重新调用" not in message
-    assert "dangerous" not in message
+    assert_no_retry_instruction(message)
     assert desktop.clicks == []
 
 
@@ -196,8 +194,7 @@ def test_说明不再指示模型因高危词改标志重试() -> None:
     sentence = INSTRUCTIONS[start : INSTRUCTIONS.index("。", start) + 1]
 
     assert "对话框" in sentence
-    assert "重新调用" not in sentence
-    assert "设为 true" not in sentence
+    assert_no_retry_instruction(sentence)
 
     async def description() -> str:
         async with Client(create_server(FakeDesktop())) as client:
@@ -209,8 +206,7 @@ def test_说明不再指示模型因高危词改标志重试() -> None:
     start = click_description.index("高危词")
     sentence = click_description[start : click_description.index("。", start) + 1]
     assert "对话框" in sentence
-    assert "重新调用" not in sentence
-    assert "设为 true" not in sentence
+    assert_no_retry_instruction(sentence)
 
 
 def test_模型自报为危险时高危词仍走裁决凭据_不弹原生对话框() -> None:

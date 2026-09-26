@@ -18,6 +18,7 @@ from computer_use.scope import TaskScope
 from computer_use.tools import click, declare_scope, get_scope, observe_window, press_keys, type_text
 
 from .fake_desktop import FakeDesktop, window
+from .support import assert_no_retry_instruction
 
 SEND_BUTTON = Rect(left=600, top=400, width=60, height=24)
 
@@ -157,9 +158,7 @@ def test_模型把外发自报成不危险时人拒绝则不执行_也不要求�
             intent="点一下", dangerous=False,
         )
 
-    message = str(intercepted.value)
-    assert "重新调用" not in message
-    assert "dangerous" not in message
+    assert_no_retry_instruction(str(intercepted.value))
     assert desktop.clicks == []
     assert len(desktop.dialogs) == 1
 
