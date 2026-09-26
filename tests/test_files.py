@@ -190,9 +190,10 @@ def test_移入回收站的裁决不能改成永久删除() -> None:
 
     assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
     assert desktop.deleted == []
+    assert desktop.dialogs == []
 
 
-def test_永久删除须显式请求_确认写明永久删除且不弹原生对话框() -> None:
+def test_永久删除经常规拦截后弹原生对话框_写明永久删除与路径_允许后才抹掉() -> None:
     desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
     arguments: dict[str, Any] = {
         "path": "E:/notes/a.txt",
@@ -211,6 +212,66 @@ def test_永久删除须显式请求_确认写明永久删除且不弹原生对�
     with pytest.raises(FileError):
         read_file(desktop, "E:/notes/a.txt")
     assert desktop.deleted == ["E:/notes/a.txt"]
+    assert desktop.recycled == []
+    [dialog] = desktop.dialogs
+    assert "永久删除" in dialog.message
+    assert "E:/notes/a.txt" in dialog.message
+    assert dialog.timeout == 60
+
+
+def test_人在原生对话框拒绝永久删除时文件保持原样() -> None:
+    desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
+    desktop.dialog_reply = False
+    arguments: dict[str, Any] = {
+        "path": "E:/notes/a.txt",
+        "permanent": True,
+        "intent": "抹掉这份草稿",
+        "dangerous": True,
+    }
+    decide(desktop, _payload(arguments, tool="delete_file"))
+
+    with pytest.raises(Intercepted, match="拒绝"):
+        delete_file(desktop, **arguments)
+
+    assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
+    assert desktop.deleted == []
+    assert desktop.recycled == []
+
+
+def test_永久删除的原生对话框超时按拒绝处理_文件保持原样() -> None:
+    desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
+    desktop.dialog_reply = None
+    arguments: dict[str, Any] = {
+        "path": "E:/notes/a.txt",
+        "permanent": True,
+        "intent": "抹掉这份草稿",
+        "dangerous": True,
+    }
+    decide(desktop, _payload(arguments, tool="delete_file"))
+
+    with pytest.raises(Intercepted, match="超时") as caught:
+        delete_file(desktop, **arguments)
+
+    assert "拒绝" in str(caught.value)
+    assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
+    assert desktop.deleted == []
+    assert desktop.recycled == []
+
+
+def test_未经常规拦截的永久删除不发生也不弹对话框() -> None:
+    desktop = FakeDesktop(files={"E:/notes/a.txt": "hello"})
+
+    with pytest.raises(Intercepted):
+        delete_file(
+            desktop,
+            "E:/notes/a.txt",
+            intent="抹掉这份草稿",
+            dangerous=True,
+            permanent=True,
+        )
+
+    assert read_file(desktop, "E:/notes/a.txt")["content"] == "hello"
+    assert desktop.deleted == []
     assert desktop.recycled == []
     assert desktop.dialogs == []
 

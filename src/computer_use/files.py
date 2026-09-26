@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from computer_use.confirmation import confirm_permanent_delete
 from computer_use.danger import judge_call
 from computer_use.desktop import DesktopPort
 from computer_use.interception import require_ruling
@@ -76,15 +77,18 @@ def delete_file(
     dangerous: bool,
     permanent: bool | None = None,
 ) -> dict[str, Any]:
-    """删除路径。默认移入回收站。`permanent` 为真才永久删除，且须单独裁决。
+    """删除路径。默认移入回收站。`permanent` 为真才永久删除。
 
-    未经人裁决时抛 `Intercepted`，文件保持原样。`permanent` 省略时不写进调用参数，
-    以免和模型实际发出的参数对不上。
+    移入回收站只经常规拦截。永久删除须单独经人裁决，通过后再弹原生对话框；
+    人拒绝或超时抛 `Intercepted`，文件保持原样。
+    `permanent` 省略时不写进调用参数，以免和模型实际发出的参数对不上。
     """
 
     arguments: dict[str, Any] = {"path": path, "intent": intent, "dangerous": dangerous}
     if permanent is not None:
         arguments["permanent"] = permanent
     require_ruling(desktop, "delete_file", arguments, judge_call("delete_file", arguments))
+    if permanent is True:
+        confirm_permanent_delete(desktop, path)
     desktop.delete_path(path, permanent=permanent is True)
     return {"path": path, "permanent": permanent is True}

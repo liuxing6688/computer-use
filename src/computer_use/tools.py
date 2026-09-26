@@ -86,7 +86,10 @@ def delete_file(
     dangerous: bool,
     permanent: bool | None = None,
 ) -> dict[str, Any]:
-    """删除文件或目录。默认移入回收站；永久删除须显式请求。一律须经人裁决。"""
+    """删除文件或目录。默认移入回收站，只经常规拦截。
+
+    永久删除须显式请求，并在常规拦截通过后再经原生对话框确认。
+    """
 
     return files.delete_file(
         desktop, path, intent=intent, dangerous=dangerous, permanent=permanent
