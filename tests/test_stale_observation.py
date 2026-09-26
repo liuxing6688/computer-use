@@ -213,7 +213,7 @@ def test_陈旧观察上的点击经由_MCP_被拒绝_记为未执行并留证()
             await client.call_tool("declare_scope", {"handles": [1]})
             observed = await client.call_tool("observe_window", {"handle": 1})
             desktop.repaint(1, _chat_list([150, *MESSAGES]))
-            arguments = {"screenshot_id": observed.data["screenshot_id"], "x": 100, "y": 140}
+            arguments = {"screenshot_id": observed.data["metadata"]["screenshot_id"], "x": 100, "y": 140}
             with pytest.raises(ToolError, match="重新观察") as refused:
                 await client.call_tool("click", {**arguments, "intent": "点第四条消息", "dangerous": False})
             return str(refused.value)

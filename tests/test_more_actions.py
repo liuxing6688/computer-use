@@ -607,7 +607,7 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
             } <= names
             await client.call_tool("declare_scope", {"handles": [1]})
             observed = await client.call_tool("observe_window", {"handle": 1})
-            screenshot_id = observed.data["screenshot_id"]
+            screenshot_id = observed.data["metadata"]["screenshot_id"]
             clicked = await client.call_tool(
                 "double_click",
                 {"screenshot_id": screenshot_id, "x": 10, "y": 20, "intent": "打开", "dangerous": False},

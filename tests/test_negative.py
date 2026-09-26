@@ -141,7 +141,7 @@ def test_陈旧截图上的点击被拒绝_理由要求重新观察() -> None:
                 await client.call_tool(
                     "click",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "x": 100,
                         "y": 140,
                         "intent": "点第四条消息",
@@ -169,7 +169,7 @@ def test_急停后继续点击被拒绝_理由指明输入工具已停() -> None
                 await client.call_tool(
                     "click",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "x": 10,
                         "y": 10,
                         "intent": "再点一下",
@@ -212,7 +212,7 @@ def _refuse(
             if prepare_handle is not None:
                 await client.call_tool("declare_scope", {"handles": [prepare_handle]})
                 observed = await client.call_tool("observe_window", {"handle": prepare_handle})
-                arguments["screenshot_id"] = observed.data["screenshot_id"]
+                arguments["screenshot_id"] = observed.data["metadata"]["screenshot_id"]
             with pytest.raises(ToolError) as refused:
                 await client.call_tool(tool, arguments)
             return str(refused.value)

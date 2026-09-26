@@ -62,7 +62,7 @@ def test_观察与放大可经由_MCP_调用_截图与元数据一并返回() ->
             zoomed = await client.call_tool(
                 "zoom",
                 {
-                    "screenshot_id": observed.data["screenshot_id"],
+                    "screenshot_id": observed.data["metadata"]["screenshot_id"],
                     "left": 10,
                     "top": 20,
                     "width": 30,
@@ -74,10 +74,13 @@ def test_观察与放大可经由_MCP_调用_截图与元数据一并返回() ->
     observed, zoomed = asyncio.run(call())
 
     assert _image_size(observed) == (320, 240)
-    assert observed.data["window"]["handle"] == 0x1234
-    assert observed.data["screen_offset"] == {"x": 100, "y": 50}
+    assert observed.data["targets"] == []
+    assert observed.data["metadata"]["window"]["handle"] == 0x1234
+    assert observed.data["metadata"]["screen_offset"] == {"x": 100, "y": 50}
     assert _image_size(zoomed) == (30, 40)
-    assert zoomed.data["window_offset"] == {"x": 10, "y": 20}
+    assert zoomed.data["targets"] == []
+    assert zoomed.data["metadata"]["window_offset"] == {"x": 10, "y": 20}
+    assert set(zoomed.data) == set(observed.data) == {"targets", "metadata"}
 
 
 def test_观察不可操作的窗口经由_MCP_返回错误() -> None:
@@ -99,7 +102,7 @@ def test_每次工具调用都记入动作日志_失败的调用留下目标窗�
         async with Client(create_server(desktop)) as client:
             await client.call_tool("list_windows", {})
             observed = await client.call_tool("observe_window", {"handle": 0x1234})
-            screenshot_id: str = observed.data["screenshot_id"]
+            screenshot_id: str = observed.data["metadata"]["screenshot_id"]
             with pytest.raises(ToolError):
                 await client.call_tool(
                     "zoom",
@@ -150,7 +153,7 @@ def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入�
             declared = await client.call_tool("declare_scope", {"handles": [1]})
             scope = await client.call_tool("get_scope", {})
             observed = await client.call_tool("observe_window", {"handle": 1})
-            screenshot_id: str = observed.data["screenshot_id"]
+            screenshot_id: str = observed.data["metadata"]["screenshot_id"]
             with pytest.raises(ToolError, match="任务作用域之外") as refused:
                 await client.call_tool(
                     "click",
@@ -199,7 +202,7 @@ def test_危险点击经由_MCP_被拦截_带_confirmed_重试也不放行_经_h
             await client.call_tool("declare_scope", {"handles": [1]})
             observed = await client.call_tool("observe_window", {"handle": 1})
             request = {
-                "screenshot_id": observed.data["screenshot_id"],
+                "screenshot_id": observed.data["metadata"]["screenshot_id"],
                 "x": 220,
                 "y": 210,
                 "intent": "删除这条订单",

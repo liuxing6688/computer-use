@@ -95,7 +95,7 @@ def test_失败的调用在真实磁盘上留下日志与记事本的截图(
                 await client.call_tool(
                     "zoom",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "left": -1,
                         "top": 0,
                         "width": 10,
@@ -129,11 +129,11 @@ def test_点击按截图像素坐标落在记事本上_缩放下落点一致(
         async with Client(create_server(desktop)) as client:
             await client.call_tool("declare_scope", {"handles": [window["handle"]]})
             observed = await client.call_tool("observe_window", {"handle": window["handle"]})
-            size = observed.data["size"]
+            size = observed.data["metadata"]["size"]
             clicked = await client.call_tool(
                 "click",
                 {
-                    "screenshot_id": observed.data["screenshot_id"],
+                    "screenshot_id": observed.data["metadata"]["screenshot_id"],
                     "x": size["width"] // 2,
                     "y": size["height"] // 2,
                     "intent": "点记事本的编辑区",
@@ -239,7 +239,7 @@ def test_中文打进记事本_原来的剪贴板内容被放回(
                 typed = await client.call_tool(
                     "type_text",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "text": "你好",
                         "intent": "在记事本里输入中文",
                         "dangerous": False,
@@ -291,7 +291,7 @@ def test_启动记事本等到窗口_按键落进它(tmp_path: Path) -> None:
                 await client.call_tool(
                     "press_keys",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "keys": ["ctrl", "o"],
                         "intent": "打开文件对话框",
                         "dangerous": False,
@@ -331,22 +331,22 @@ def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全�
                 assert any(item["handle"] == window["handle"] for item in found.data)
                 await client.call_tool("declare_scope", {"handles": [window["handle"]]})
                 observed = await client.call_tool("observe_window", {"handle": window["handle"]})
-                size = observed.data["size"]
+                size = observed.data["metadata"]["size"]
                 zoomed = await client.call_tool(
                     "zoom",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "left": size["width"] // 4,
                         "top": size["height"] // 4,
                         "width": size["width"] // 2,
                         "height": size["height"] // 2,
                     },
                 )
-                zoom_size = zoomed.data["size"]
+                zoom_size = zoomed.data["metadata"]["size"]
                 clicked = await client.call_tool(
                     "click",
                     {
-                        "screenshot_id": zoomed.data["screenshot_id"],
+                        "screenshot_id": zoomed.data["metadata"]["screenshot_id"],
                         "x": zoom_size["width"] // 2,
                         "y": zoom_size["height"] // 2,
                         "intent": "点记事本的编辑区",
@@ -361,7 +361,7 @@ def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全�
                 await client.call_tool(
                     "type_text",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "text": "computer-use-acceptance",
                         "intent": "在记事本里输入验收文本",
                         "dangerous": False,
@@ -370,7 +370,7 @@ def test_记事本端到端_找到窗口_观察_定位_点击_输入_保存_全�
                 await client.call_tool(
                     "press_keys",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "keys": ["ctrl", "s"],
                         "intent": "保存",
                         "dangerous": False,

@@ -449,7 +449,7 @@ async def _type_via_mcp(desktop: FakeDesktop) -> dict[str, Any]:
         typed = await client.call_tool(
             "type_text",
             {
-                "screenshot_id": observed.data["screenshot_id"],
+                "screenshot_id": observed.data["metadata"]["screenshot_id"],
                 "text": "你好",
                 "intent": "填写姓名",
                 "dangerous": False,
@@ -471,7 +471,7 @@ def test_作用域外的文本输入经由_MCP_返回错误且不注入() -> Non
                 await client.call_tool(
                     "type_text",
                     {
-                        "screenshot_id": observed.data["screenshot_id"],
+                        "screenshot_id": observed.data["metadata"]["screenshot_id"],
                         "text": "不该打出去",
                         "intent": "填写姓名",
                         "dangerous": False,

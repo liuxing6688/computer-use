@@ -374,7 +374,7 @@ def test_服务注册的全局热键按下后输入被拒绝_确认恢复后才�
             clicked = await client.call_tool(
                 "click",
                 {
-                    "screenshot_id": observed.data["screenshot_id"],
+                    "screenshot_id": observed.data["metadata"]["screenshot_id"],
                     "x": 10,
                     "y": 10,
                     "intent": "点一下",

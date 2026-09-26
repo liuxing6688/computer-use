@@ -26,6 +26,17 @@ class ObservationError(Exception):
 
 
 @dataclass(frozen=True)
+class Target:
+    """界面上一个可被单独指称的对象：一段描述，以及它在这张截图上的边界框。
+
+    `rect` 的单位是这张截图的像素。由哪个感知通道产出不影响这项的形状。
+    """
+
+    description: str
+    rect: Rect
+
+
+@dataclass(frozen=True)
 class Screenshot:
     """一张交给模型的截图，以及把它的像素坐标换算回屏幕所需的全部事实。
 
@@ -39,6 +50,7 @@ class Screenshot:
     region: Rect
     scale: float
     capture: Capture
+    targets: tuple[Target, ...] = ()
 
     @property
     def window_offset(self) -> tuple[int, int]:

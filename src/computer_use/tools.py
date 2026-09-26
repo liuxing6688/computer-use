@@ -12,7 +12,7 @@ from typing import Any, Callable, Sequence
 
 from computer_use import actions, files, observation, powershell
 from computer_use.desktop import DesktopPort, Rect, Window
-from computer_use.observation import Screenshot, Screenshots
+from computer_use.observation import Screenshot, Screenshots, Target
 from computer_use.pace import Pace
 from computer_use.scope import TaskScope
 from computer_use.untrusted import wrap_untrusted
@@ -21,13 +21,14 @@ from computer_use.windows import operable_windows
 
 @dataclass(frozen=True)
 class Observed:
-    """一张截图的 PNG 编码与它的元数据。
+    """一次观察交给模型的三部分：截图、目标清单、采集时刻的元数据。
 
-    元数据里的 `targets` 是目标清单。每一项是一段描述，以及它在这张截图上的边界框
-    （`rect`：`left`、`top`、`width`、`height`，截图像素）。由哪个感知通道产出不影响这项的形状。
+    目标清单与采集元数据并列。每一项是一段描述，以及它在这张截图上的边界框
+    （`rect`：`left`、`top`、`width`、`height`，截图像素）。像素通道不产出目标，清单为空。
     """
 
     png: bytes
+    targets: tuple[Target, ...]
     metadata: dict[str, Any]
 
 
@@ -95,18 +96,18 @@ def delete_file(
 def observe_window(
     desktop: DesktopPort, screenshots: Screenshots, handle: int
 ) -> Observed:
-    """只读工具：截取一个窗口，附带把截图坐标换算回屏幕所需的元数据。
+    """只读工具：截取一个窗口，返回截图、空的目标清单，以及采集元数据。
 
-    像素通道不产出目标，`targets` 为空；定位仍靠截图。
+    像素通道不产出目标，定位仍靠截图。
     """
 
     return _as_observed(observation.observe(desktop, screenshots, handle))
 
 
 def zoom(screenshots: Screenshots, screenshot_id: str, rect: Rect) -> Observed:
-    """只读工具：把截图上的一块矩形按原尺寸放大，附带同样的元数据。
+    """只读工具：把截图上的一块矩形按原尺寸放大。
 
-    `targets` 与观察同一形状；像素通道下为空。
+    返回与观察相同的三部分。像素通道下目标清单同样为空。
     """
 
     return _as_observed(observation.zoom(screenshots, screenshot_id, rect))
@@ -372,12 +373,34 @@ def _as_identity(window: Window) -> dict[str, Any]:
     }
 
 
+def as_observation(observed: Observed) -> dict[str, Any]:
+    """模型看到的一次观察：目标清单与采集元数据并列。"""
+
+    return {
+        "targets": [_as_target(target) for target in observed.targets],
+        "metadata": observed.metadata,
+    }
+
+
+def _as_target(target: Target) -> dict[str, Any]:
+    return {
+        "description": wrap_untrusted(target.description),
+        "rect": {
+            "left": target.rect.left,
+            "top": target.rect.top,
+            "width": target.rect.width,
+            "height": target.rect.height,
+        },
+    }
+
+
 def _as_observed(screenshot: Screenshot) -> Observed:
     png = io.BytesIO()
     screenshot.image.save(png, format="PNG")
     window_x, window_y = screenshot.window_offset
     return Observed(
         png=png.getvalue(),
+        targets=screenshot.targets,
         metadata={
             "screenshot_id": screenshot.id,
             "window": _as_identity(screenshot.window),
@@ -387,7 +410,6 @@ def _as_observed(screenshot: Screenshot) -> Observed:
             "dpi_scale": screenshot.capture.dpi_scale,
             "screen_offset": {"x": screenshot.region.left, "y": screenshot.region.top},
             "window_offset": {"x": window_x, "y": window_y},
-            "targets": [],
         },
     )
 
