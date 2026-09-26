@@ -46,6 +46,9 @@ INSTRUCTIONS = f"""\
 会离开目标窗口，一律拒绝。
 `launch_app` 启动一个 .exe 并等待它的新窗口；超时会说明期间出现了哪些别的窗口。
 新窗口不会自动进入任务作用域。启动终端、系统设置或资源管理器须经人确认后才启动。
+单击、双击、右键、拖拽、滚动、输入文本、按键、启动应用在执行成功后都返回变化说明：
+前台窗口有没有变、新出现了哪些看得见的窗口（含没有标题的）。只为这两件事不必再做一次观察。
+被拦截或失败时不会把结果说成执行成功。
 不能用来启动命令解释器或脚本宿主。
 点击前服务端会重新采集落点附近，与那张截图比对；界面在此期间变了就拒绝执行，此时请重新观察。
 输入文本用 `type_text`，打进目标窗口当前的焦点输入框。中文优先走剪贴板粘贴，原剪贴板内容会在事后恢复；
@@ -310,7 +313,8 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         判为危险的点击须由人在 Claude Code 中确认后才会执行；没有任何参数能跳过这一步。
 外发动作（发送、提交、发布、支付等）在那之后还会弹出系统对话框，同时给发送类摆上当前窗口截图和已输入的内容；
 人拒绝或超时都不执行，也没有任何参数能跳过这个对话框。
-        返回落点处的窗口与落点的屏幕物理像素坐标（仅供参考）。
+        返回落点处的窗口与落点的屏幕物理像素坐标（仅供参考），以及变化说明：
+        前台窗口有没有变、新出现了哪些看得见的窗口。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -336,6 +340,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         坐标、命中测试、截图比对与危险判定都与 `click` 相同。
         `intent` 用一句话说明这次双击要做什么，记入动作日志。
+        执行成功后返回落点与变化说明。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -361,6 +366,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         坐标、命中测试、截图比对与危险判定都与 `click` 相同。
         `intent` 用一句话说明这次右键要做什么，记入动作日志。
+        执行成功后返回落点与变化说明。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -386,6 +392,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         两个点都用这张截图的像素坐标，都要落在任务作用域内。起点还要通过截图比对。
         `intent` 用一句话说明这次拖拽要做什么，记入动作日志。
+        执行成功后返回两端落点与变化说明。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -418,6 +425,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         `notches` 为正向上、为负向下，一格是一次滚轮凹口。落点的命中测试与截图比对和 `click` 相同。
         `intent` 用一句话说明这次滚动要做什么，记入动作日志。
+        执行成功后返回落点、格数与变化说明。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -452,6 +460,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         home、end、pageup、pagedown、方向键都可以。先把该窗口带到前台，没能到前台就不按。
         Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete 会离开目标窗口，一律拒绝。
         `intent` 用一句话说明这次按键要做什么，记入动作日志。
+        执行成功后返回送到的窗口、按键与变化说明。
         """
 
         window = _window_of(screenshots, screenshot_id)
@@ -480,6 +489,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         终端、系统设置、资源管理器会打开高危窗口，须经人确认后才启动。
         命令解释器与脚本宿主不能从这里启动。
         `intent` 用一句话说明为什么启动它，记入动作日志。
+        执行成功后返回新窗口、进程号与变化说明。
         """
 
         return _refusal_as_tool_error(
@@ -502,7 +512,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         先把该窗口带到前台。优先经剪贴板粘贴：先保存原剪贴板内容，粘贴之后恢复，
         调用方原来复制的内容不会被留下。粘贴走不通（剪贴板打不开，或按键送不进去）时，
         改为逐字符 Unicode 注入。
-        返回实际落到的窗口、`tier` 与 `clipboard_used`。`tier` 为 `clipboard` 表示走了剪贴板粘贴，
+        返回实际落到的窗口、`tier`、`clipboard_used` 与变化说明。`tier` 为 `clipboard` 表示走了剪贴板粘贴，
         为 `unicode` 表示降级成了逐字符注入。`clipboard_used` 为真表示这段文本曾经写入剪贴板。
         `intent` 用一句话说明这次输入要做什么，记入动作日志。文本本身不写入日志。
         `dangerous` 自报这次输入是否危险：后果难以撤销或后果离开本机即为危险。

@@ -372,6 +372,16 @@ def test_启动应用后等到它的新窗口_作用域不变() -> None:
             "process_name": "notepad.exe",
         },
         "process_id": 4242,
+        "change": {
+            "foreground_changed": False,
+            "new_windows": [
+                {
+                    "handle": 9,
+                    "title": "<untrusted-screen>无标题 - 记事本</untrusted-screen>",
+                    "process_name": "notepad.exe",
+                }
+            ],
+        },
     }
     assert get_scope(scope) == []
 

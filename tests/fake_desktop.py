@@ -38,6 +38,13 @@ _CHANGED_FRACTION = 0.02
 """目标区域里变了的像素超过这个比例才算实质变化；闪烁的光标只占百分之一不到。"""
 
 
+class _LeaveForeground:
+    """`after_input` 不改前台时的占位，和「前台变成没有窗口」区分开。"""
+
+
+_LEAVE_FOREGROUND = _LeaveForeground()
+
+
 @dataclass(frozen=True)
 class ShownDialog:
     """测试替身记下的一次原生确认：人还没点，内容已经摆好。"""
@@ -107,6 +114,9 @@ class FakeDesktop:
         self.command_result = CommandResult(stdout="", stderr="", exit_code=0)
         self.command_error: str | None = None
         self.focus_fails = False
+        self.foreground: int | None = None
+        self._after_foreground: int | None | _LeaveForeground = _LEAVE_FOREGROUND
+        self._after_windows: list[Window] = []
         self.clipboard_read_fails = False
         self.clipboard_write_fails = False
         self.clipboard_restore_fails = False
@@ -148,6 +158,31 @@ class FakeDesktop:
             total_pixels=total,
         )
 
+    def foreground_window(self) -> int | None:
+        return self.foreground
+
+    def after_input(
+        self,
+        *,
+        foreground: int | None | _LeaveForeground = _LEAVE_FOREGROUND,
+        windows: Sequence[Window] = (),
+    ) -> None:
+        """下一次成功的输入注入结束时改前台，并让这些窗口出现。只生效一次。
+
+        不传 `foreground` 则前台保持原样。传入 `None` 表示注入之后没有前台窗口。
+        """
+
+        self._after_foreground = foreground
+        self._after_windows = list(windows)
+
+    def _apply_after_input(self) -> None:
+        if not isinstance(self._after_foreground, _LeaveForeground):
+            self.foreground = self._after_foreground
+            self._after_foreground = _LEAVE_FOREGROUND
+        if self._after_windows:
+            self._windows[0:0] = self._after_windows
+            self._after_windows = []
+
     def window_at(self, x: int, y: int) -> int | None:
         for w in self._windows:
             r = w.rect
@@ -183,21 +218,27 @@ class FakeDesktop:
 
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
+        self._apply_after_input()
 
     def double_click(self, x: int, y: int) -> None:
         self.double_clicks.append((x, y))
+        self._apply_after_input()
 
     def right_click(self, x: int, y: int) -> None:
         self.right_clicks.append((x, y))
+        self._apply_after_input()
 
     def drag(self, x: int, y: int, to_x: int, to_y: int) -> None:
         self.drags.append((x, y, to_x, to_y))
+        self._apply_after_input()
 
     def scroll(self, x: int, y: int, notches: int) -> None:
         self.scrolls.append((x, y, notches))
+        self._apply_after_input()
 
     def press_keys(self, keys: Sequence[str]) -> None:
         self.chords.append(tuple(keys))
+        self._apply_after_input()
 
     def launch(self, executable: str) -> int:
         self.launched.append(executable)
@@ -205,6 +246,7 @@ class FakeDesktop:
             raise LaunchError(self.launch_error)
         self._windows[0:0] = list(self.spawn)
         self.spawn = []
+        self._apply_after_input()
         return self.launch_pid
 
     def add_window(self, extra: Window) -> None:
@@ -214,6 +256,7 @@ class FakeDesktop:
         self.trace.append(("focus", handle))
         if self.focus_fails:
             raise ForegroundError(f"窗口 {handle} 没能来到前台")
+        self.foreground = handle
 
     def read_clipboard(self) -> Clipboard:
         self.trace.append(("read_clipboard",))
@@ -238,12 +281,14 @@ class FakeDesktop:
         if self.paste_fails:
             raise ClipboardUnavailable("粘贴没能送进前台窗口")
         self.pasted.append(self.clipboard)
+        self._apply_after_input()
 
     def type_character(self, character: str) -> None:
         self.trace.append(("type_character", character))
         if self.unicode_fails:
             raise InjectionError(f"字符 {character!r} 没能送进前台窗口")
         self.characters.append(character)
+        self._apply_after_input()
 
     def append_log(self, line: str) -> None:
         assert "\n" not in line, "一条日志须是一行"

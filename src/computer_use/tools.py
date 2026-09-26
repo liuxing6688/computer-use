@@ -141,9 +141,9 @@ def click(
     dangerous: bool,
     pace: Pace | None = None,
 ) -> dict[str, Any]:
-    """输入工具：在某张截图的像素 `(x, y)` 处单击，返回实际落点。"""
+    """输入工具：在某张截图的像素 `(x, y)` 处单击，返回实际落点与变化说明。"""
 
-    landed = actions.click(
+    landed, change = actions.click(
         desktop,
         screenshots,
         scope,
@@ -154,7 +154,7 @@ def click(
         dangerous=dangerous,
         pace=pace,
     )
-    return _as_landed(landed)
+    return _with_change(_as_landed(landed), change)
 
 
 def double_click(
@@ -169,14 +169,13 @@ def double_click(
     dangerous: bool,
     pace: Pace | None = None,
 ) -> dict[str, Any]:
-    """输入工具：在某张截图的像素 `(x, y)` 处双击，返回实际落点。"""
+    """输入工具：在某张截图的像素 `(x, y)` 处双击，返回实际落点与变化说明。"""
 
-    return _as_landed(
-        actions.double_click(
-            desktop, screenshots, scope, screenshot_id, x, y,
-            intent=intent, dangerous=dangerous, pace=pace,
-        )
+    landed, change = actions.double_click(
+        desktop, screenshots, scope, screenshot_id, x, y,
+        intent=intent, dangerous=dangerous, pace=pace,
     )
+    return _with_change(_as_landed(landed), change)
 
 
 def right_click(
@@ -191,14 +190,13 @@ def right_click(
     dangerous: bool,
     pace: Pace | None = None,
 ) -> dict[str, Any]:
-    """输入工具：在某张截图的像素 `(x, y)` 处单击右键，返回实际落点。"""
+    """输入工具：在某张截图的像素 `(x, y)` 处单击右键，返回实际落点与变化说明。"""
 
-    return _as_landed(
-        actions.right_click(
-            desktop, screenshots, scope, screenshot_id, x, y,
-            intent=intent, dangerous=dangerous, pace=pace,
-        )
+    landed, change = actions.right_click(
+        desktop, screenshots, scope, screenshot_id, x, y,
+        intent=intent, dangerous=dangerous, pace=pace,
     )
+    return _with_change(_as_landed(landed), change)
 
 
 def drag(
@@ -217,11 +215,13 @@ def drag(
 ) -> dict[str, Any]:
     """输入工具：从截图像素 `(x, y)` 拖到 `(to_x, to_y)`，返回两端的实际落点。"""
 
-    dragged = actions.drag(
+    dragged, change = actions.drag(
         desktop, screenshots, scope, screenshot_id, x, y, to_x, to_y,
         intent=intent, dangerous=dangerous, pace=pace,
     )
-    return {**_as_landed(dragged.start), "to": _as_landed(dragged.end)}
+    return _with_change(
+        {**_as_landed(dragged.start), "to": _as_landed(dragged.end)}, change
+    )
 
 
 def scroll(
@@ -237,13 +237,13 @@ def scroll(
     dangerous: bool,
     pace: Pace | None = None,
 ) -> dict[str, Any]:
-    """输入工具：在某张截图的像素 `(x, y)` 处滚动，返回实际落点与格数。"""
+    """输入工具：在某张截图的像素 `(x, y)` 处滚动，返回实际落点、格数与变化说明。"""
 
-    landed = actions.scroll(
+    landed, change = actions.scroll(
         desktop, screenshots, scope, screenshot_id, x, y, notches,
         intent=intent, dangerous=dangerous, pace=pace,
     )
-    return {**_as_landed(landed), "notches": notches}
+    return _with_change({**_as_landed(landed), "notches": notches}, change)
 
 
 def press_keys(
@@ -257,13 +257,15 @@ def press_keys(
     dangerous: bool,
     pace: Pace | None = None,
 ) -> dict[str, Any]:
-    """输入工具：把组合键送进某张截图所属的窗口。"""
+    """输入工具：把组合键送进某张截图所属的窗口，返回送到的窗口、按键与变化说明。"""
 
-    pressed = actions.press_keys(
+    pressed, change = actions.press_keys(
         desktop, screenshots, scope, screenshot_id, keys,
         intent=intent, dangerous=dangerous, pace=pace,
     )
-    return {"window": _as_identity(pressed.window), "keys": list(pressed.keys)}
+    return _with_change(
+        {"window": _as_identity(pressed.window), "keys": list(pressed.keys)}, change
+    )
 
 
 def launch_app(
@@ -277,13 +279,18 @@ def launch_app(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """输入工具：启动一个应用并等到它的新窗口。新窗口不进入任务作用域。"""
+    """输入工具：启动一个应用并等到它的新窗口。新窗口不进入任务作用域。
 
-    launched = actions.launch_app(
+    成功时返回该窗口、进程号，以及变化说明。
+    """
+
+    launched, change = actions.launch_app(
         desktop, app,
         intent=intent, dangerous=dangerous, pace=pace, timeout=timeout, clock=clock, sleep=sleep,
     )
-    return {"window": _as_identity(launched.window), "process_id": launched.process_id}
+    return _with_change(
+        {"window": _as_identity(launched.window), "process_id": launched.process_id}, change
+    )
 
 
 def type_text(
@@ -303,7 +310,7 @@ def type_text(
     `clipboard_used` 为真表示这段文本曾经写入剪贴板（调用结束时原内容已恢复，除非恢复本身失败）。
     """
 
-    typed = actions.type_text(
+    typed, change = actions.type_text(
         desktop,
         screenshots,
         scope,
@@ -313,17 +320,31 @@ def type_text(
         dangerous=dangerous,
         pace=pace,
     )
-    return {
-        "window": _as_identity(typed.window),
-        "tier": typed.tier,
-        "clipboard_used": typed.clipboard_used,
-    }
+    return _with_change(
+        {
+            "window": _as_identity(typed.window),
+            "tier": typed.tier,
+            "clipboard_used": typed.clipboard_used,
+        },
+        change,
+    )
 
 
 def resume(desktop: DesktopPort, pace: Pace) -> str:
     """显式恢复：解除急停，使输入工具重新可用。未急停时无事发生。"""
 
     return actions.resume(desktop, pace)
+
+
+def _with_change(payload: dict[str, Any], change: actions.Change) -> dict[str, Any]:
+    return {**payload, "change": _as_change(change)}
+
+
+def _as_change(change: actions.Change) -> dict[str, Any]:
+    return {
+        "foreground_changed": change.foreground_changed,
+        "new_windows": [_as_identity(window) for window in change.new_windows],
+    }
 
 
 def _as_landed(landed: actions.Landed) -> dict[str, Any]:

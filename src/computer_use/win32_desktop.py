@@ -276,6 +276,10 @@ class Win32Desktop:
             total_pixels=total,
         )
 
+    def foreground_window(self) -> int | None:
+        handle = win32gui.GetForegroundWindow()
+        return int(handle) if handle else None
+
     def window_at(self, x: int, y: int) -> int | None:
         child = _user32.WindowFromPoint(wintypes.POINT(x, y))
         if not child:

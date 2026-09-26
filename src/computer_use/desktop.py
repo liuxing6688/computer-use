@@ -166,6 +166,10 @@ class DesktopPort(Protocol):
         """屏幕物理像素 `(x, y)` 处最上层的顶层窗口；那里没有窗口时为 `None`。"""
         ...
 
+    def foreground_window(self) -> int | None:
+        """当前前台窗口的句柄。没有前台窗口时为 `None`。"""
+        ...
+
     def agent_process_ids(self) -> Collection[int]:
         """Agent 自身所在的进程：本服务及其各级父进程，其中之一持有 Agent 所在的窗口。"""
         ...

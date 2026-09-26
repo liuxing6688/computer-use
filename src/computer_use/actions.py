@@ -22,6 +22,22 @@ from computer_use.windows import operable_windows
 
 
 @dataclass(frozen=True)
+class Change:
+    """动作执行完时，相对执行前的变化说明：前台窗口有没有变，以及新出现在桌面上的窗口。"""
+
+    foreground_changed: bool
+    new_windows: tuple[Window, ...]
+
+
+@dataclass(frozen=True)
+class _Before:
+    """注入前的前台窗口句柄，以及当时桌面上的窗口句柄。"""
+
+    foreground: int | None
+    handles: frozenset[int]
+
+
+@dataclass(frozen=True)
 class Landed:
     """一次动作实际落在哪里：屏幕物理像素坐标，以及那里的顶层窗口。"""
 
@@ -45,11 +61,12 @@ def click(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Landed:
+) -> tuple[Landed, Change]:
     """在截图 `screenshot_id` 的像素 `(x, y)` 处单击。
 
     落点未通过命中测试、或截图之后落点附近的界面已经变化时抛 `Intercepted`，裁决凭据也救不回来；
     模型自报或落点附近的文字判为危险、又没有经人裁决时同样抛 `Intercepted`。
+    成功时附带变化说明；拦截或失败时不返回。
     """
 
     arguments = {
@@ -63,8 +80,8 @@ def click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="click", arguments=arguments, pace=pace,
     )
-    _inject(gate, lambda: desktop.click(landed.x, landed.y))
-    return landed
+    change = _inject(desktop, gate, lambda: desktop.click(landed.x, landed.y))
+    return landed, change
 
 
 def double_click(
@@ -78,8 +95,11 @@ def double_click(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Landed:
-    """在截图 `screenshot_id` 的像素 `(x, y)` 处双击。放行条件与单击相同。"""
+) -> tuple[Landed, Change]:
+    """在截图 `screenshot_id` 的像素 `(x, y)` 处双击。放行条件与单击相同。
+
+    成功时附带变化说明；拦截或失败时不返回。
+    """
 
     arguments = {
         "screenshot_id": screenshot_id,
@@ -92,8 +112,8 @@ def double_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="double_click", arguments=arguments, pace=pace,
     )
-    _inject(gate, lambda: desktop.double_click(landed.x, landed.y))
-    return landed
+    change = _inject(desktop, gate, lambda: desktop.double_click(landed.x, landed.y))
+    return landed, change
 
 
 def right_click(
@@ -107,8 +127,11 @@ def right_click(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Landed:
-    """在截图 `screenshot_id` 的像素 `(x, y)` 处单击右键。放行条件与单击相同。"""
+) -> tuple[Landed, Change]:
+    """在截图 `screenshot_id` 的像素 `(x, y)` 处单击右键。放行条件与单击相同。
+
+    成功时附带变化说明；拦截或失败时不返回。
+    """
 
     arguments = {
         "screenshot_id": screenshot_id,
@@ -121,8 +144,8 @@ def right_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="right_click", arguments=arguments, pace=pace,
     )
-    _inject(gate, lambda: desktop.right_click(landed.x, landed.y))
-    return landed
+    change = _inject(desktop, gate, lambda: desktop.right_click(landed.x, landed.y))
+    return landed, change
 
 
 @dataclass(frozen=True)
@@ -146,8 +169,11 @@ def drag(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Dragged:
-    """从截图像素 `(x, y)` 拖到 `(to_x, to_y)`。两个落点都要在任务作用域内。"""
+) -> tuple[Dragged, Change]:
+    """从截图像素 `(x, y)` 拖到 `(to_x, to_y)`。两个落点都要在任务作用域内。
+
+    成功时附带变化说明；拦截或失败时不返回。
+    """
 
     arguments = {
         "screenshot_id": screenshot_id,
@@ -162,8 +188,8 @@ def drag(
         desktop, screenshots, scope, screenshot_id, [(x, y), (to_x, to_y)],
         tool="drag", arguments=arguments, pace=pace,
     )
-    _inject(gate, lambda: desktop.drag(start.x, start.y, end.x, end.y))
-    return Dragged(start=start, end=end)
+    change = _inject(desktop, gate, lambda: desktop.drag(start.x, start.y, end.x, end.y))
+    return Dragged(start=start, end=end), change
 
 
 def scroll(
@@ -178,8 +204,11 @@ def scroll(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Landed:
-    """在截图像素 `(x, y)` 处滚动。`notches` 为正向上、为负向下。"""
+) -> tuple[Landed, Change]:
+    """在截图像素 `(x, y)` 处滚动。`notches` 为正向上、为负向下。
+
+    成功时附带变化说明；拦截或失败时不返回。
+    """
 
     if notches == 0:
         raise ActionError("滚动格数不能为 0")
@@ -195,8 +224,8 @@ def scroll(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="scroll", arguments=arguments, pace=pace,
     )
-    _inject(gate, lambda: desktop.scroll(landed.x, landed.y, notches))
-    return landed
+    change = _inject(desktop, gate, lambda: desktop.scroll(landed.x, landed.y, notches))
+    return landed, change
 
 
 @dataclass(frozen=True)
@@ -217,11 +246,12 @@ def press_keys(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Pressed:
+) -> tuple[Pressed, Change]:
     """把组合键送进截图所属窗口。先把窗口带到前台，送不进去就不按。
 
     交给系统而不是目标窗口的组合（Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete）
     一律拦截，裁决凭据也不能放行。
+    成功时附带变化说明；拦截或失败时不返回。
     """
 
     gate = pace or Pace(desktop)
@@ -244,6 +274,7 @@ def press_keys(
     require_ruling(desktop, "press_keys", arguments, verdict)
     confirm_outbound(desktop, scope, intent=intent, nearby=None, window=window)
     gate.wait_to_inject(cleared=cleared)
+    before = _before(desktop)
     try:
         desktop.focus(window.handle)
         desktop.press_keys(chord)
@@ -251,7 +282,7 @@ def press_keys(
         gate.abandon()
         raise
     gate.mark_injected()
-    return Pressed(window=window, keys=chord)
+    return Pressed(window=window, keys=chord), _change_since(desktop, before)
 
 
 @dataclass(frozen=True)
@@ -272,11 +303,12 @@ def launch_app(
     timeout: float = 15,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-) -> Launched:
+) -> tuple[Launched, Change]:
     """启动一个 .exe 并等待它的新窗口。不把新窗口放进任务作用域。
 
     会打开高危窗口的程序先问人一次，确认后才启动。
     脚本宿主在启动前就拒绝。超时仍找不到时抛 `ActionError`，说明期间新出现了哪些别的窗口。
+    成功时附带变化说明；拦截或失败时不返回。
     """
 
     executable, exe_name = _executable(app)
@@ -290,8 +322,8 @@ def launch_app(
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "launch_app", arguments, verdict)
-    before = {w.handle for w in desktop.list_windows()}
     gate.wait_to_inject(cleared=cleared)
+    before = _before(desktop)
     try:
         process_id = desktop.launch(executable)
     except BaseException:
@@ -299,9 +331,16 @@ def launch_app(
         raise
     gate.mark_injected()
     found = _await_window(
-        desktop, before, process_id, exe_name, timeout=timeout, clock=clock, sleep=sleep, gate=gate
+        desktop,
+        set(before.handles),
+        process_id,
+        exe_name,
+        timeout=timeout,
+        clock=clock,
+        sleep=sleep,
+        gate=gate,
     )
-    return Launched(window=found, process_id=process_id)
+    return Launched(window=found, process_id=process_id), _change_since(desktop, before)
 
 
 @dataclass(frozen=True)
@@ -323,12 +362,13 @@ def type_text(
     intent: str,
     dangerous: bool,
     pace: Pace | None = None,
-) -> Typed:
+) -> tuple[Typed, Change]:
     """把 `text` 打进截图 `screenshot_id` 所属窗口的焦点输入框。
 
     先把该窗口带到前台。优先把文本写入剪贴板再粘贴，并在事后恢复原来的剪贴板内容；
     这一档走不通时改为逐字符注入。粘贴已经成功而恢复失败时不再注入，免得文本进两次。
     模型自报为危险、又没有经人裁决时抛 `Intercepted`。
+    成功时附带变化说明；拦截或失败时不返回。
     """
 
     gate = pace or Pace(desktop)
@@ -347,6 +387,7 @@ def type_text(
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "type_text", arguments, verdict)
     gate.wait_to_inject(cleared=cleared)
+    before = _before(desktop)
     try:
         desktop.focus(window.handle)
         tier, clipboard_used = _deliver(desktop, text, gate)
@@ -355,7 +396,7 @@ def type_text(
         raise
     gate.mark_injected()
     scope.remember_text(window.handle, text)
-    return Typed(window=window, tier=tier, clipboard_used=clipboard_used)
+    return Typed(window=window, tier=tier, clipboard_used=clipboard_used), _change_since(desktop, before)
 
 
 def resume(desktop: DesktopPort, pace: Pace) -> str:
@@ -431,13 +472,47 @@ def _high_risk_windows(desktop: DesktopPort, windows: Sequence[Window]) -> Verdi
     return Verdict(tuple(reasons))
 
 
-def _inject(gate: Pace, inject: Callable[[], None]) -> None:
+def _before(desktop: DesktopPort) -> _Before:
+    """记下注入前的前台窗口，以及当时桌面上的窗口句柄。"""
+
+    return _Before(
+        foreground=desktop.foreground_window(),
+        handles=frozenset(window.handle for window in desktop.list_windows()),
+    )
+
+
+def _change_since(desktop: DesktopPort, before: _Before) -> Change:
+    """对比注入之后的桌面。
+
+    新窗口指新出现、并且当时看得见、没有最小化的顶层窗口。
+    没有标题的也算，菜单和对话框常常不带标题。
+    不可见的和缩在任务栏里的不算出现。
+    """
+
+    foreground = desktop.foreground_window()
+    new = tuple(
+        window
+        for window in desktop.list_windows()
+        if window.handle not in before.handles and _appeared(window)
+    )
+    return Change(foreground_changed=foreground != before.foreground, new_windows=new)
+
+
+def _appeared(window: Window) -> bool:
+    return window.is_visible and not window.is_minimized
+
+
+def _inject(desktop: DesktopPort, gate: Pace, inject: Callable[[], None]) -> Change:
+    """注入，并在成功之后给出相对注入前的变化说明。失败时不给出。"""
+
+    before = _before(desktop)
     try:
         inject()
     except BaseException:
         gate.abandon()
         raise
     gate.mark_injected()
+    return _change_since(desktop, before)
 
 
 _MODIFIERS = frozenset({"ctrl", "alt", "shift", "win"})

@@ -113,6 +113,7 @@ def test_点击作用域内的窗口_按截图像素坐标落到屏幕上() -> N
             "process_name": "notepad.exe",
         },
         "screen_point": {"x": 510, "y": 220},
+        "change": {"foreground_changed": False, "new_windows": []},
     }
 
 

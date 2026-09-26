@@ -52,6 +52,7 @@ def test_中文经剪贴板粘贴进焦点输入框_原剪贴板内容被恢复(
         },
         "tier": "clipboard",
         "clipboard_used": True,
+        "change": {"foreground_changed": True, "new_windows": []},
     }
     assert desktop.pasted == ["你好"]
     assert desktop.characters == []
@@ -430,6 +431,7 @@ def test_文本输入可经由_MCP_调用_日志不记下文本本身() -> None:
         },
         "tier": "clipboard",
         "clipboard_used": True,
+        "change": {"foreground_changed": True, "new_windows": []},
     }
     assert desktop.pasted == ["你好"]
     assert desktop.clipboard == "用户复制的"
