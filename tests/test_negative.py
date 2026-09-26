@@ -54,6 +54,7 @@ def test_高危窗口点击被拒绝_理由指明终端() -> None:
 
     assert "高危窗口" in refusal
     assert "终端" in refusal
+    assert "dangerous" in refusal
     assert desktop.clicks == []
 
 

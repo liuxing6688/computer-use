@@ -1,4 +1,7 @@
-"""任务作用域与点击：按截图像素坐标点击，落点须在作用域内且不是高危窗口。"""
+"""任务作用域与点击：按截图像素坐标点击，落点须在作用域内。
+
+落在作用域内的高危窗口上时不直接封死，未经人确认不执行，确认后才执行。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ import pytest
 
 from computer_use.action_log import Intercepted
 from computer_use.desktop import Rect
+from computer_use.hook import decide
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import ScopeError, TaskScope
 from computer_use import tools
@@ -243,10 +247,9 @@ def test_作用域内窗口弹出的对话框也在作用域内() -> None:
         ("SystemSettings.exe", "系统设置"),
         ("regedit.exe", "系统设置"),
         ("explorer.exe", "资源管理器"),
-        ("", "无法确认"),
     ],
 )
-def test_高危窗口即使在作用域内也一律拒绝点击(process_name: str, reason: str) -> None:
+def test_任务作用域里的高危窗口未经人确认不点击(process_name: str, reason: str) -> None:
     desktop = FakeDesktop([window(handle=1, title="高危", process_name=process_name)])
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1])
@@ -254,11 +257,62 @@ def test_高危窗口即使在作用域内也一律拒绝点击(process_name: st
     with pytest.raises(Intercepted, match="高危窗口") as intercepted:
         click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 10)
 
-    assert reason in str(intercepted.value)
+    message = str(intercepted.value)
+    assert reason in message
+    assert "dangerous" in message
+    assert desktop.clicks == []
+    assert desktop.dialogs == []
+
+
+def test_认不出进程的窗口即使在作用域内也拒绝点击() -> None:
+    desktop = FakeDesktop([window(handle=1, title="提权", process_name="")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+
+    with pytest.raises(Intercepted, match="无法确认") as intercepted:
+        click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 10)
+
+    assert "高危窗口" in str(intercepted.value)
+    assert desktop.clicks == []
+
+    arguments: dict[str, Any] = {
+        "screenshot_id": _observed(desktop, screenshots, 1),
+        "x": 10,
+        "y": 10,
+        "intent": "点一下",
+        "dangerous": True,
+    }
+    decide(desktop, {"tool_name": "mcp__computer-use__click", "tool_input": arguments})
+
+    with pytest.raises(Intercepted, match="无法确认"):
+        tools.click(desktop, screenshots, scope, **arguments)
+
     assert desktop.clicks == []
 
 
-def test_Agent_自身所在的窗口即使在作用域内也一律拒绝点击() -> None:
+def test_所有者认不出进程时对话框上的点击也被拒绝() -> None:
+    desktop = FakeDesktop(
+        [
+            window(
+                handle=2,
+                title="属性",
+                owner=1,
+                process_name="notepad.exe",
+                rect=Rect(0, 0, 100, 100),
+            ),
+            window(handle=1, title="提权", process_name=""),
+        ]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1, 2])
+
+    with pytest.raises(Intercepted, match="无法确认"):
+        click(desktop, screenshots, scope, _observed(desktop, screenshots, 2), 10, 10)
+
+    assert desktop.clicks == []
+
+
+def test_Agent_自身所在的窗口即使在作用域内也须经人确认才点击() -> None:
     desktop = FakeDesktop(
         [window(handle=1, title="computer-use - Cursor", process_name="Cursor.exe", process_id=42)],
         agent_processes={7, 42},
@@ -266,13 +320,14 @@ def test_Agent_自身所在的窗口即使在作用域内也一律拒绝点击()
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1])
 
-    with pytest.raises(Intercepted, match="Agent 自身"):
+    with pytest.raises(Intercepted, match="Agent 自身") as intercepted:
         click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 10)
 
+    assert "dangerous" in str(intercepted.value)
     assert desktop.clicks == []
 
 
-def test_高危窗口弹出的对话框同样拒绝点击() -> None:
+def test_高危窗口弹出的对话框同样须经人确认才点击() -> None:
     desktop = FakeDesktop(
         [
             window(handle=2, title="属性", owner=1, process_name="notepad.exe", rect=Rect(0, 0, 100, 100)),
@@ -282,10 +337,74 @@ def test_高危窗口弹出的对话框同样拒绝点击() -> None:
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1, 2])
 
-    with pytest.raises(Intercepted, match="终端"):
+    with pytest.raises(Intercepted, match="终端") as intercepted:
         click(desktop, screenshots, scope, _observed(desktop, screenshots, 2), 10, 10)
 
+    assert "dangerous" in str(intercepted.value)
     assert desktop.clicks == []
+
+
+def test_裁决不能让落到作用域外的高危窗口放行() -> None:
+    desktop = FakeDesktop(
+        [
+            window(handle=2, title="命令提示符", process_name="cmd.exe", rect=Rect(0, 0, 80, 80)),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(0, 0, 320, 240)),
+        ]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id = _observed(desktop, screenshots, 1)
+    arguments: dict[str, Any] = {
+        "screenshot_id": screenshot_id,
+        "x": 10,
+        "y": 10,
+        "intent": "点进终端",
+        "dangerous": True,
+    }
+    decide(desktop, {"tool_name": "mcp__computer-use__click", "tool_input": arguments})
+
+    with pytest.raises(Intercepted, match="任务作用域之外"):
+        tools.click(desktop, screenshots, scope, **arguments)
+
+    assert desktop.clicks == []
+
+
+def test_人确认后才点击作用域内的高危窗口() -> None:
+    desktop = FakeDesktop([window(handle=1, title="管理员: Windows PowerShell", process_name="powershell.exe")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id = _observed(desktop, screenshots, 1)
+    arguments: dict[str, Any] = {
+        "screenshot_id": screenshot_id,
+        "x": 10,
+        "y": 10,
+        "intent": "点进终端",
+        "dangerous": True,
+    }
+
+    with pytest.raises(Intercepted, match="没有经过人的裁决"):
+        tools.click(desktop, screenshots, scope, **arguments)
+
+    assert desktop.clicks == []
+    decision = decide(desktop, {"tool_name": "mcp__computer-use__click", "tool_input": arguments})
+    assert decision is not None
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    tools.click(desktop, screenshots, scope, **arguments)
+
+    assert desktop.clicks == [(10, 10)]
+    assert desktop.dialogs == []
+
+
+def test_任务作用域内的普通窗口点击不额外询问() -> None:
+    desktop = FakeDesktop([window(handle=1, title="无标题 - 记事本", process_name="notepad.exe")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+
+    click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 10)
+
+    assert desktop.clicks == [(10, 10)]
+    assert desktop.dialogs == []
 
 
 def test_未知的截图_ID_被拒绝_不注入点击() -> None:

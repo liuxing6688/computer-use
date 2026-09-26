@@ -16,7 +16,7 @@ from computer_use.desktop import Clipboard, ClipboardUnavailable, DesktopPort, W
 from computer_use.interception import require_ruling
 from computer_use.observation import Screenshots, confirm_unchanged
 from computer_use.pace import Pace, budget_verdict
-from computer_use.scope import TaskScope, risk_of_process
+from computer_use.scope import TaskScope, landing_risk, risk_of_process
 from computer_use.untrusted import quoted_window
 from computer_use.windows import operable_windows
 
@@ -237,7 +237,7 @@ def press_keys(
         "intent": intent,
         "dangerous": dangerous,
     }
-    verdict = judge_call("press_keys", arguments)
+    verdict = judge_call("press_keys", arguments) | _high_risk_windows(desktop, [window])
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
@@ -275,19 +275,17 @@ def launch_app(
 ) -> Launched:
     """启动一个 .exe 并等待它的新窗口。不把新窗口放进任务作用域。
 
-    终端、系统设置、资源管理器和脚本宿主在启动前就拒绝：那是绕过命中测试去开一扇高危窗口。
-    超时仍找不到时抛 `ActionError`，说明期间新出现了哪些别的窗口。
+    会打开高危窗口的程序先问人一次，确认后才启动。
+    脚本宿主在启动前就拒绝。超时仍找不到时抛 `ActionError`，说明期间新出现了哪些别的窗口。
     """
 
     executable, exe_name = _executable(app)
-    if (risk := risk_of_process(exe_name)) is not None:
-        raise Intercepted(f"不能启动 {exe_name}：它会打开高危窗口（{risk}）")
     if exe_name.lower() in _SCRIPT_HOSTS:
         raise Intercepted(f"不能启动 {exe_name}：命令解释器或脚本宿主不从这里启动")
     gate = pace or Pace(desktop)
     gate.reject_if_stopped()
     arguments = {"app": app, "intent": intent, "dangerous": dangerous}
-    verdict = judge_call("launch_app", arguments)
+    verdict = judge_call("launch_app", arguments) | _launch_high_risk(exe_name)
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
@@ -343,7 +341,7 @@ def type_text(
         "intent": intent,
         "dangerous": dangerous,
     }
-    verdict = judge_call("type_text", arguments)
+    verdict = judge_call("type_text", arguments) | _high_risk_windows(desktop, [window])
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
@@ -393,7 +391,7 @@ def _prepare_points(
     windows = [scope.admit(desktop, x, y) for x, y in screen]
     confirm_unchanged(desktop, screenshot, screen[0][0], screen[0][1], windows[0])
     nearby = read_nearby(desktop, screenshot, screen[0][0], screen[0][1])
-    verdict = judge_call(tool, arguments) | judge_nearby_text(nearby)
+    verdict = judge_call(tool, arguments) | judge_nearby_text(nearby) | _high_risk_windows(desktop, windows)
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
@@ -410,6 +408,27 @@ def _prepare_points(
         Landed(window=window, x=x, y=y) for window, (x, y) in zip(windows, screen, strict=True)
     ]
     return landed, gate
+
+
+def _launch_high_risk(exe_name: str) -> Verdict:
+    """启动这个程序会打开高危窗口时的判定。普通程序不增加理由。"""
+
+    if (risk := risk_of_process(exe_name)) is None:
+        return Verdict()
+    return Verdict((f"启动 {exe_name} 会打开高危窗口（{risk}），须经人确认",))
+
+
+def _high_risk_windows(desktop: DesktopPort, windows: Sequence[Window]) -> Verdict:
+    """落点（或其所有者）是高危窗口时的判定。普通窗口不增加理由，因此不多问一次。"""
+
+    reasons: list[str] = []
+    for window in windows:
+        if (risk := landing_risk(desktop, window)) is None:
+            continue
+        reason = f"落在高危窗口（{risk}）上，须经人确认"
+        if reason not in reasons:
+            reasons.append(reason)
+    return Verdict(tuple(reasons))
 
 
 def _inject(gate: Pace, inject: Callable[[], None]) -> None:

@@ -1,6 +1,7 @@
 """双击、右键、拖拽、滚动、组合键，以及启动应用并等待它的窗口。
 
-落点与按键都要过任务作用域和命中测试；启动不能打开高危窗口或脚本宿主。
+落点与按键都要过任务作用域和命中测试。作用域内的高危窗口先问人一次。
+启动会打开高危窗口的程序同样先问一次；脚本宿主仍然不能启动。
 """
 
 from __future__ import annotations
@@ -136,18 +137,100 @@ def test_落点被挡住时右键被拦截且不注入() -> None:
     assert desktop.right_clicks == []
 
 
-def test_高危窗口上的双击被拦截() -> None:
+def test_高危窗口上的双击未经人确认不执行() -> None:
     desktop = FakeDesktop([window(handle=1, title="管理员: Windows PowerShell", process_name="pwsh.exe")])
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1])
 
-    with pytest.raises(Intercepted, match="终端"):
+    with pytest.raises(Intercepted, match="终端") as intercepted:
         double_click(
             desktop, screenshots, scope, _shot(desktop, screenshots), 10, 10,
             intent="点进去", dangerous=False,
         )
 
+    assert "dangerous" in str(intercepted.value)
     assert desktop.double_clicks == []
+
+
+def test_拖到作用域内的高危窗口上时未经人确认不拖() -> None:
+    desktop = FakeDesktop(
+        [
+            window(
+                handle=2,
+                title="文件资源管理器",
+                process_name="explorer.exe",
+                rect=Rect(500, 200, 40, 40),
+            ),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240)),
+        ]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1, 2])
+    screenshot_id = _shot(desktop, screenshots, 1)
+
+    with pytest.raises(Intercepted, match="资源管理器") as intercepted:
+        drag(
+            desktop, screenshots, scope, screenshot_id, 200, 100, 10, 10,
+            intent="拖进去", dangerous=False,
+        )
+
+    assert "dangerous" in str(intercepted.value)
+    assert desktop.drags == []
+
+
+def test_认不出进程的窗口不接受按键() -> None:
+    desktop = FakeDesktop([window(handle=1, title="提权", process_name="")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+
+    with pytest.raises(Intercepted, match="无法确认"):
+        press_keys(
+            desktop, screenshots, scope, _shot(desktop, screenshots, 1), ["enter"],
+            intent="执行", dangerous=True,
+        )
+
+    assert desktop.chords == []
+
+
+def test_高危窗口上的按键未经人确认不送出_确认后才按下() -> None:
+    desktop = FakeDesktop([window(handle=1, title="命令提示符", process_name="cmd.exe")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id = _shot(desktop, screenshots, 1)
+    arguments = {
+        "screenshot_id": screenshot_id,
+        "keys": ["enter"],
+        "intent": "执行",
+        "dangerous": True,
+    }
+
+    with pytest.raises(Intercepted, match="终端") as intercepted:
+        press_keys(
+            desktop, screenshots, scope, screenshot_id, ["enter"],
+            intent="执行", dangerous=False,
+        )
+
+    assert "dangerous" in str(intercepted.value)
+    assert desktop.chords == []
+
+    with pytest.raises(Intercepted, match="没有经过人的裁决"):
+        press_keys(
+            desktop, screenshots, scope, screenshot_id, ["enter"],
+            intent="执行", dangerous=True,
+        )
+
+    decision = decide(
+        desktop, {"tool_name": "mcp__computer-use__press_keys", "tool_input": arguments}
+    )
+    assert decision is not None
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    press_keys(
+        desktop, screenshots, scope, screenshot_id, ["enter"],
+        intent="执行", dangerous=True,
+    )
+
+    assert desktop.chords == [("enter",)]
 
 
 def test_滚动按凹口数注入_零格被拒绝() -> None:
@@ -372,15 +455,56 @@ def test_稍晚出现的窗口赶在超时前被等到() -> None:
         ("cmd", "终端"),
         ("powershell", "终端"),
         ("explorer.exe", "资源管理器"),
-        ("wscript", "脚本宿主"),
-        ("mshta.exe", "脚本宿主"),
+        ("SystemSettings.exe", "系统设置"),
     ],
 )
-def test_不启动高危程序或脚本宿主(app: str, reason: str) -> None:
+def test_启动高危程序未经人确认不启动(app: str, reason: str) -> None:
     desktop = FakeDesktop()
 
-    with pytest.raises(Intercepted, match=reason):
+    with pytest.raises(Intercepted, match=reason) as intercepted:
         launch_app(desktop, app, intent="跑一下", dangerous=False)
+
+    assert "dangerous" in str(intercepted.value)
+    assert desktop.launched == []
+
+
+def test_人确认后才启动会打开高危窗口的程序() -> None:
+    desktop = FakeDesktop()
+    desktop.spawn = [
+        window(handle=9, title="命令提示符", process_name="cmd.exe", process_id=4242)
+    ]
+    arguments = {"app": "cmd", "intent": "开一个终端", "dangerous": True}
+    _, clock, sleep = _frozen_clock()
+
+    with pytest.raises(Intercepted, match="没有经过人的裁决"):
+        launch_app(
+            desktop, "cmd", intent="开一个终端", dangerous=True, clock=clock, sleep=sleep
+        )
+
+    assert desktop.launched == []
+    decision = decide(
+        desktop, {"tool_name": "mcp__computer-use__launch_app", "tool_input": arguments}
+    )
+    assert decision is not None
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    result = launch_app(
+        desktop, "cmd", intent="开一个终端", dangerous=True, clock=clock, sleep=sleep
+    )
+
+    assert desktop.launched == ["cmd.exe"]
+    assert result["window"]["handle"] == 9
+    assert desktop.dialogs == []
+
+
+@pytest.mark.parametrize("app", ["wscript", "mshta.exe"])
+def test_不启动脚本宿主(app: str) -> None:
+    desktop = FakeDesktop()
+    arguments = {"app": app, "intent": "跑一下", "dangerous": True}
+    decide(desktop, {"tool_name": "mcp__computer-use__launch_app", "tool_input": arguments})
+
+    with pytest.raises(Intercepted, match="脚本宿主"):
+        launch_app(desktop, app, intent="跑一下", dangerous=True)
 
     assert desktop.launched == []
 

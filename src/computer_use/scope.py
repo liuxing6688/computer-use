@@ -70,7 +70,8 @@ class TaskScope:
     def admit(self, desktop: DesktopPort, x: int, y: int) -> Window:
         """命中测试：屏幕物理像素 `(x, y)` 处的顶层窗口，它须在作用域内。
 
-        不在作用域内时抛 `Intercepted`，理由指明落点处是哪个窗口。
+        不在作用域内，或认不出所属进程时抛 `Intercepted`，理由指明落点处是哪个窗口。
+        高危窗口只要在作用域内就返回，由调用方问人一次。
         """
 
         if not self._windows:
@@ -81,22 +82,17 @@ class TaskScope:
         if hit is None:
             raise Intercepted(f"落点 ({x}, {y}) 处没有窗口")
         chain = _owner_chain(hit, all_windows)
-        agent_processes = frozenset(desktop.agent_process_ids())
-        for w in chain:
-            if (risk := _high_risk(w, agent_processes)) is not None:
-                raise Intercepted(
-                    f"落点 ({x}, {y}) 处是{_describe(hit)}，属于高危窗口（{risk}），"
-                    "即使在任务作用域内也一律拒绝"
-                )
+        _reject_if_unreachable(chain, hit, f"落点 ({x}, {y}) 处")
         declared = {(w.handle, w.process_id) for w in self._windows}
         if not any((w.handle, w.process_id) in declared for w in chain):
             raise Intercepted(f"落点 ({x}, {y}) 处是{_describe(hit)}，在任务作用域之外")
         return hit
 
     def admit_window(self, desktop: DesktopPort, window: Window) -> Window:
-        """文本输入的目标：截图所属的那个窗口，须仍在，且在作用域内、不是高危窗口。
+        """文本输入的目标：截图所属的那个窗口，须仍在，且在作用域内。
 
         文本输入没有落点，目标就是这扇窗口本身。它弹出的对话框也算作用域内。
+        高危窗口在作用域内时不在这里拒绝，由调用方问人一次。
         """
 
         if not self._windows:
@@ -115,13 +111,7 @@ class TaskScope:
                 "在任务作用域之外"
             )
         chain = _owner_chain(current, all_windows)
-        agent_processes = frozenset(desktop.agent_process_ids())
-        for w in chain:
-            if (risk := _high_risk(w, agent_processes)) is not None:
-                raise Intercepted(
-                    f"目标是{_describe(current)}，属于高危窗口（{risk}），"
-                    "即使在任务作用域内也一律拒绝"
-                )
+        _reject_if_unreachable(chain, current, "目标")
         declared = {(w.handle, w.process_id) for w in self._windows}
         if not any((w.handle, w.process_id) in declared for w in chain):
             raise Intercepted(f"目标是{_describe(current)}，在任务作用域之外")
@@ -156,6 +146,21 @@ _SYSTEM_SETTINGS = frozenset(
 _FILE_EXPLORER = "explorer.exe"
 
 
+def landing_risk(desktop: DesktopPort, window: Window) -> str | None:
+    """这扇窗口，或其所有者，为何要在动作前问人一次。不必问时为 `None`。
+
+    认不出进程的窗口不在这里返回：那种窗口在放行前就已经拒绝。
+    """
+
+    all_windows = {w.handle: w for w in desktop.list_windows()}
+    current = all_windows.get(window.handle, window)
+    agent_processes = frozenset(desktop.agent_process_ids())
+    for owner in _owner_chain(current, all_windows):
+        if (risk := _askable_risk(owner, agent_processes)) is not None:
+            return risk
+    return None
+
+
 def risk_of_process(process_name: str) -> str | None:
     """进程名为何使它的窗口成为高危窗口；不是时为 `None`。
 
@@ -174,12 +179,24 @@ def risk_of_process(process_name: str) -> str | None:
     return None
 
 
-def _high_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
-    """`window` 为何是高危窗口；不是时为 `None`。"""
+def _askable_risk(window: Window, agent_processes: frozenset[int]) -> str | None:
+    """`window` 为何要在动作前问人一次；不必问，或进程名认不出来时为 `None`。"""
 
+    if not window.process_name:
+        return None
     if window.process_id in agent_processes:
         return "Agent 自身所在的窗口"
     return risk_of_process(window.process_name)
+
+
+def _reject_if_unreachable(chain: list[Window], described: Window, where: str) -> None:
+    """链上有认不出进程的窗口时拒绝。够不到的多半是提权进程，问人也点不进去。"""
+
+    if any(not window.process_name for window in chain):
+        raise Intercepted(
+            f"{where}是{_describe(described)}，属于高危窗口（无法确认所属进程，可能是提权窗口），"
+            "即使在任务作用域内也一律拒绝"
+        )
 
 
 def _describe(window: Window) -> str:

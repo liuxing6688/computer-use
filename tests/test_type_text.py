@@ -218,25 +218,90 @@ def test_目标窗口不在任务作用域内时不输入() -> None:
     assert desktop.trace == []
 
 
-def test_高危窗口即使在作用域内也不输入() -> None:
+def test_认不出进程的窗口即使在作用域内也不输入() -> None:
+    desktop = FakeDesktop([window(handle=1, title="提权", process_name="")])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id = _observed(desktop, screenshots, 1)
+    arguments = {
+        "screenshot_id": screenshot_id,
+        "text": "你好",
+        "intent": "填写姓名",
+        "dangerous": True,
+    }
+    decide(desktop, {"tool_name": "mcp__computer-use__type_text", "tool_input": arguments})
+
+    with pytest.raises(Intercepted, match="无法确认"):
+        type_text(
+            desktop,
+            screenshots,
+            scope,
+            screenshot_id,
+            "你好",
+            intent="填写姓名",
+            dangerous=True,
+        )
+
+    assert desktop.trace == []
+
+
+def test_高危窗口即使在作用域内也须经人确认才输入() -> None:
     desktop = FakeDesktop(
         [window(handle=1, title="管理员: Windows PowerShell", process_name="powershell.exe")]
     )
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1])
+    screenshot_id = _observed(desktop, screenshots, 1)
+    arguments = {
+        "screenshot_id": screenshot_id,
+        "text": "你好",
+        "intent": "填写姓名",
+        "dangerous": True,
+    }
 
-    with pytest.raises(Intercepted, match="高危窗口"):
+    with pytest.raises(Intercepted, match="高危窗口") as intercepted:
         type_text(
             desktop,
             screenshots,
             scope,
-            _observed(desktop, screenshots, 1),
+            screenshot_id,
             "你好",
             intent="填写姓名",
             dangerous=False,
         )
 
+    assert "dangerous" in str(intercepted.value)
     assert desktop.trace == []
+
+    with pytest.raises(Intercepted, match="没有经过人的裁决"):
+        type_text(
+            desktop,
+            screenshots,
+            scope,
+            screenshot_id,
+            "你好",
+            intent="填写姓名",
+            dangerous=True,
+        )
+
+    assert desktop.trace == []
+    decision = decide(
+        desktop, {"tool_name": "mcp__computer-use__type_text", "tool_input": arguments}
+    )
+    assert decision is not None
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    type_text(
+        desktop,
+        screenshots,
+        scope,
+        screenshot_id,
+        "你好",
+        intent="填写姓名",
+        dangerous=True,
+    )
+
+    assert desktop.pasted == ["你好"]
 
 
 def test_作用域内窗口弹出的对话框可以输入() -> None:
