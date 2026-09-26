@@ -297,6 +297,37 @@ def test_显式恢复须经人确认_确认后输入工具重新可用() -> None
     assert desktop.clicks == [(10, 10)]
 
 
+def test_急停后未经人确认就调用_resume_输入工具仍然拒绝() -> None:
+    desktop, screenshots, scope, screenshot_id, pace, _clock = _ready()
+    pace.stop()
+
+    with pytest.raises(Intercepted, match="确认"):
+        resume(desktop, pace)
+
+    with pytest.raises(Intercepted, match="急停"):
+        click(
+            desktop, screenshots, scope, screenshot_id, 10, 10,
+            intent="点一下", dangerous=False, pace=pace,
+        )
+
+    assert desktop.clicks == []
+    assert desktop.read_pace().stopped
+
+
+def test_未急停时调用_resume_不改变当前状态() -> None:
+    desktop, screenshots, scope, screenshot_id, pace, clock = _ready()
+    click(desktop, screenshots, scope, screenshot_id, 10, 10, intent="点一下", dangerous=False, pace=pace)
+    before = desktop.read_pace()
+
+    assert resume(desktop, pace) == "没有处于急停"
+
+    assert desktop.read_pace() == before
+    click(desktop, screenshots, scope, screenshot_id, 20, 20, intent="再点一下", dangerous=False, pace=pace)
+    assert clock.now == INPUT_INTERVAL
+    assert desktop.clicks == [(10, 10), (20, 20)]
+    assert desktop.read_pace() == PaceState(streak=2, stopped=False)
+
+
 def test_hook_急停时不把输入工具交给人_恢复才交给人() -> None:
     desktop = FakeDesktop()
     arguments = {"screenshot_id": "shot-1", "x": 1, "y": 2, "intent": "点一下", "dangerous": True}
