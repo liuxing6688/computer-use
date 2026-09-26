@@ -400,7 +400,7 @@ def _as_observed(screenshot: Screenshot) -> Observed:
     window_x, window_y = screenshot.window_offset
     return Observed(
         png=png.getvalue(),
-        targets=screenshot.targets,
+        targets=(),
         metadata={
             "screenshot_id": screenshot.id,
             "window": _as_identity(screenshot.window),

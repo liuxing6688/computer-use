@@ -126,7 +126,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         矩形用那张截图的像素坐标给出。返回的是同一时刻的裁剪，不会重新截图；
         它有自己的截图 ID，`window_offset` 在 `metadata` 里，是裁剪相对窗口截图左上角的偏移。
-        `targets` 与观察并列、同一形状；像素通道下同样为空。
+        目标清单是这次观察的一部分，与 `metadata` 并列，形状与观察窗口相同；像素通道下同样为空。
         """
 
         rect = Rect(left=left, top=top, width=width, height=height)

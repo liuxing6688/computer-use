@@ -50,7 +50,6 @@ class Screenshot:
     region: Rect
     scale: float
     capture: Capture
-    targets: tuple[Target, ...] = ()
 
     @property
     def window_offset(self) -> tuple[int, int]:
