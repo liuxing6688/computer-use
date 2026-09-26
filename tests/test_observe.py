@@ -71,7 +71,24 @@ def test_观察附带窗口标识_采集时刻_缩放比_屏幕偏移与截图_I
         "dpi_scale": 1.25,
         "screen_offset": {"x": 500, "y": 200},
         "window_offset": {"x": 0, "y": 0},
+        "targets": [],
     }
+
+
+def test_观察返回空的目标清单_截图仍可用() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="记事本", rect=Rect(0, 0, 320, 240))],
+        images={1: Image.new("RGB", (320, 240), "red")},
+    )
+
+    observed = observe_window(desktop, Screenshots(), handle=1)
+
+    assert observed.metadata["targets"] == []
+    image = _decode(observed.png)
+    assert image.size == (320, 240)
+    assert image.getcolors() == [(320 * 240, (255, 0, 0))]
+    assert observed.metadata["screenshot_id"]
+    assert observed.metadata["window"]["handle"] == 1
 
 
 @pytest.mark.parametrize("handle", [2, 404], ids=["最小化的窗口", "不存在的窗口"])
@@ -145,6 +162,22 @@ def test_放大返回指定矩形的原尺寸裁剪与它相对窗口的偏移()
     assert zoomed.metadata["window_offset"] == {"x": 1980, "y": 380}
     assert zoomed.metadata["screen_offset"] == {"x": 2080, "y": 430}
     assert zoomed.metadata["captured_at"] == observed.metadata["captured_at"]
+
+
+def test_放大返回与观察同一形状的空目标清单_截图与元数据仍可用() -> None:
+    desktop = FakeDesktop([window(handle=1, rect=Rect(100, 50, 320, 240))])
+    screenshots = Screenshots()
+    observed = observe_window(desktop, screenshots, handle=1)
+
+    zoomed = zoom(
+        screenshots, observed.metadata["screenshot_id"], Rect(10, 20, 30, 40)
+    )
+
+    assert zoomed.metadata["targets"] == []
+    assert set(zoomed.metadata) == set(observed.metadata)
+    assert _decode(zoomed.png).size == (30, 40)
+    assert zoomed.metadata["window_offset"] == {"x": 10, "y": 20}
+    assert zoomed.metadata["screenshot_id"] != observed.metadata["screenshot_id"]
 
 
 def test_放大的截图_ID_同样可解析回屏幕坐标() -> None:

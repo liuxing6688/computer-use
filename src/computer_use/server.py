@@ -104,6 +104,9 @@ def create_server(desktop: DesktopPort) -> FastMCP:
         元数据含截图 ID、窗口、采集时刻、截图尺寸、缩放比（截图像素 / 屏幕物理像素，
         窗口过大时服务端会先缩小）、显示器 DPI 缩放、截图左上角的屏幕偏移，以及相对窗口的偏移。
         两个偏移都是物理像素，仅供参考；指称位置时只用截图像素坐标。
+        `targets` 是目标清单。每一项是一段描述，以及它在这张截图上的边界框
+        （`rect` 的 `left`、`top`、`width`、`height`，截图像素）。像素通道不产出目标，清单为空，
+        定位仍靠截图。
         """
 
         return _observed_result(
@@ -123,6 +126,7 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         矩形用那张截图的像素坐标给出。返回的是同一时刻的裁剪，不会重新截图；
         它有自己的截图 ID，`window_offset` 是裁剪相对窗口截图左上角的偏移。
+        `targets` 与观察同一形状；像素通道下同样为空。
         """
 
         rect = Rect(left=left, top=top, width=width, height=height)
