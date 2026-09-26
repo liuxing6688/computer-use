@@ -63,6 +63,7 @@ class FakeDesktop:
     `texts` 是屏幕上写着的文字及其屏幕矩形，文字识别读出中心落在识别区域内的那些；
     `unreadable` 为真时文字识别无法进行。
     注入的点击、文本、剪贴板、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
+    `fail_observation_after_input` 为真时，下一次成功的输入结束之后，紧接着的那一次桌面采集失败。
     `region_change` 若已指定，像素比较直接返回它，不必准备真实像素；
     否则与 Windows 实现用同一套容差比较。
     """
@@ -114,6 +115,8 @@ class FakeDesktop:
         self.command_result = CommandResult(stdout="", stderr="", exit_code=0)
         self.command_error: str | None = None
         self.focus_fails = False
+        self.fail_observation_after_input = False
+        self._observation_fails = False
         self.foreground: int | None = None
         self._after_foreground: int | None | _LeaveForeground = _LEAVE_FOREGROUND
         self._after_windows: list[Window] = []
@@ -125,6 +128,7 @@ class FakeDesktop:
         self.region_change: RegionChange | None = None
 
     def list_windows(self) -> Sequence[Window]:
+        self._raise_if_observation_fails()
         return tuple(self._windows)
 
     def capture_window(self, handle: int) -> Capture:
@@ -159,6 +163,7 @@ class FakeDesktop:
         )
 
     def foreground_window(self) -> int | None:
+        self._raise_if_observation_fails()
         return self.foreground
 
     def after_input(
@@ -182,6 +187,14 @@ class FakeDesktop:
         if self._after_windows:
             self._windows[0:0] = self._after_windows
             self._after_windows = []
+        if self.fail_observation_after_input:
+            self._observation_fails = True
+            self.fail_observation_after_input = False
+
+    def _raise_if_observation_fails(self) -> None:
+        if self._observation_fails:
+            self._observation_fails = False
+            raise OSError("采集不了当前桌面")
 
     def window_at(self, x: int, y: int) -> int | None:
         for w in self._windows:

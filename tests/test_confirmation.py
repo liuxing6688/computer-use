@@ -92,6 +92,30 @@ def test_发送类确认同时呈现当前窗口截图与已输入内容() -> No
     assert "（无）" not in dialog.message
 
 
+def test_变化说明采集失败时已打进的文字仍出现在发送确认里() -> None:
+    desktop = _desktop()
+    screenshots, scope, screenshot_id = _ready(desktop)
+    desktop.fail_observation_after_input = True
+
+    with pytest.raises(OSError, match="采集不了当前桌面"):
+        type_text(
+            desktop, screenshots, scope, screenshot_id, "明天见",
+            intent="填进输入框", dangerous=False,
+        )
+
+    assert desktop.pasted == ["明天见"]
+    arguments = _arguments(screenshot_id=screenshot_id, intent="发送这条消息")
+    decide(desktop, _payload(arguments))
+    click(
+        desktop, screenshots, scope, screenshot_id, 630, 412,
+        intent="发送这条消息", dangerous=True,
+    )
+
+    [dialog] = desktop.dialogs
+    assert "明天见" in dialog.message
+    assert "（无）" not in dialog.message
+
+
 def test_支付确认不附带已输入内容() -> None:
     desktop = _desktop(texts=[(SEND_BUTTON, "支付")])
     screenshots, scope, screenshot_id = _ready(desktop)

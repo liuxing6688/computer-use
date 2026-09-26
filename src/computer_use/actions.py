@@ -403,11 +403,11 @@ def type_text(
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "type_text", arguments, verdict)
     gate.wait_to_inject(cleared=cleared)
-    (tier, clipboard_used), change = _inject(
+    (tier, clipboard_used), before = _focus_then(
         desktop, gate, lambda: _deliver(desktop, text, gate), window=window
     )
     scope.remember_text(window.handle, text)
-    return Typed(window=window, tier=tier, clipboard_used=clipboard_used), change
+    return Typed(window=window, tier=tier, clipboard_used=clipboard_used), _change_since(desktop, before)
 
 
 def resume(desktop: DesktopPort, pace: Pace) -> str:
@@ -525,6 +525,15 @@ def _inject(
     成功时返回 `inject` 的结果，以及相对注入前的变化说明。失败时不返回。
     """
 
+    produced, before = _focus_then(desktop, gate, inject, window=window)
+    return produced, _change_since(desktop, before)
+
+
+def _focus_then(
+    desktop: DesktopPort, gate: Pace, inject: Callable[[], T], *, window: Window
+) -> tuple[T, _Before]:
+    """先把 `window` 带到前台，再执行 `inject`，并记下注入前的桌面。带不到前台则不执行。"""
+
     before = _before(desktop)
     try:
         desktop.focus(window.handle)
@@ -533,7 +542,7 @@ def _inject(
         gate.abandon()
         raise
     gate.mark_injected()
-    return produced, _change_since(desktop, before)
+    return produced, before
 
 
 _MODIFIERS = frozenset({"ctrl", "alt", "shift", "win"})
