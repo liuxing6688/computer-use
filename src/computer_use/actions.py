@@ -254,8 +254,8 @@ def press_keys(
 ) -> tuple[Pressed, Change]:
     """把组合键送进截图所属窗口。先把窗口带到前台，送不进去就不按。
 
-    交给系统而不是目标窗口的组合（Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete）
-    一律拦截，裁决凭据也不能放行。
+    Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete 与其他按键走同一条路：
+    落到任务作用域外，或被判为危险动作时不执行。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -264,8 +264,6 @@ def press_keys(
     screenshot = screenshots.resolve(screenshot_id)
     window = scope.admit_window(desktop, screenshot.window)
     chord = _normalize_keys(keys)
-    if (blocked := _blocked_chord(frozenset(chord))) is not None:
-        raise Intercepted(blocked)
     arguments = {
         "screenshot_id": screenshot_id,
         "keys": list(keys),
@@ -577,22 +575,6 @@ def _known_key(key: str) -> bool:
         number = int(key[1:])
         return 1 <= number <= 12
     return False
-
-
-def _blocked_chord(keys: frozenset[str]) -> str | None:
-    """这个组合为什么不能送进目标窗口；能送时为 `None`。"""
-
-    if "win" in keys:
-        return "含 Windows 键的组合会交给系统，而不是目标窗口"
-    if "alt" in keys and "tab" in keys:
-        return "Alt+Tab 会切换窗口，离开任务作用域"
-    if "alt" in keys and "escape" in keys:
-        return "Alt+Esc 会切换窗口，离开任务作用域"
-    if "ctrl" in keys and "escape" in keys:
-        return "Ctrl+Esc 会打开开始菜单或任务管理器，离开任务作用域"
-    if {"ctrl", "alt", "delete"} <= keys:
-        return "Ctrl+Alt+Delete 交给系统，而不是目标窗口"
-    return None
 
 
 def _executable(app: str) -> tuple[str, str]:

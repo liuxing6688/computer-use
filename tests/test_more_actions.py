@@ -34,6 +34,17 @@ from computer_use.tools import (
 
 from .fake_desktop import FakeDesktop, window
 
+_SYSTEM_CHORDS = (
+    ["win"],
+    ["win", "r"],
+    ["alt", "tab"],
+    ["alt", "shift", "tab"],
+    ["alt", "escape"],
+    ["ctrl", "escape"],
+    ["ctrl", "shift", "escape"],
+    ["ctrl", "alt", "delete"],
+)
+
 
 def _ready(
     desktop: FakeDesktop | None = None,
@@ -291,23 +302,46 @@ def test_功能键可以单独按下() -> None:
     assert desktop.chords == [("f5",)]
 
 
-@pytest.mark.parametrize(
-    ("keys", "reason"),
-    [
-        (["win", "r"], "Windows 键"),
-        (["alt", "tab"], r"Alt\+Tab"),
-        (["alt", "shift", "tab"], r"Alt\+Tab"),
-        (["ctrl", "escape"], r"Ctrl\+Esc"),
-        (["ctrl", "shift", "escape"], r"Ctrl\+Esc"),
-        (["alt", "escape"], r"Alt\+Esc"),
-        (["ctrl", "alt", "delete"], r"Ctrl\+Alt\+Delete"),
-    ],
-)
-def test_交给系统的组合键被拦截_不抢前台也不注入(keys: list[str], reason: str) -> None:
+@pytest.mark.parametrize("keys", _SYSTEM_CHORDS)
+def test_任务作用域内且未判为危险时可以送出这些组合键(keys: list[str]) -> None:
     desktop, screenshots, scope, screenshot_id = _ready()
 
-    with pytest.raises(Intercepted, match=reason):
-        press_keys(desktop, screenshots, scope, screenshot_id, keys, intent="切走", dangerous=False)
+    result = press_keys(
+        desktop, screenshots, scope, screenshot_id, keys, intent="切走", dangerous=False
+    )
+
+    assert desktop.trace == [("focus", 1)]
+    assert desktop.chords == [tuple(keys)]
+    assert result["keys"] == keys
+    assert result["window"]["handle"] == 1
+
+
+@pytest.mark.parametrize("keys", _SYSTEM_CHORDS)
+def test_落到任务作用域外的这些组合键不执行(keys: list[str]) -> None:
+    desktop = FakeDesktop(
+        [window(handle=1), window(handle=2, title="计算器", rect=Rect(900, 0, 100, 100))]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [2])
+
+    with pytest.raises(Intercepted, match="任务作用域之外"):
+        press_keys(
+            desktop, screenshots, scope, _shot(desktop, screenshots, 1), keys,
+            intent="切走", dangerous=False,
+        )
+
+    assert desktop.trace == []
+    assert desktop.chords == []
+
+
+@pytest.mark.parametrize("keys", _SYSTEM_CHORDS)
+def test_自报危险的这些组合键未经裁决不执行(keys: list[str]) -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+
+    with pytest.raises(Intercepted, match="没有经过人的裁决"):
+        press_keys(
+            desktop, screenshots, scope, screenshot_id, keys, intent="切走", dangerous=True
+        )
 
     assert desktop.trace == []
     assert desktop.chords == []
@@ -594,7 +628,7 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
         window(handle=9, title="计算器", process_name="calc.exe", process_id=4242)
     ]
 
-    async def call() -> tuple[dict[str, Any], str, dict[str, Any]]:
+    async def call() -> tuple[dict[str, Any], dict[str, Any], str, dict[str, Any]]:
         async with Client(create_server(desktop)) as client:
             names = {tool.name for tool in await client.list_tools()}
             assert {
@@ -612,14 +646,23 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
                 "double_click",
                 {"screenshot_id": screenshot_id, "x": 10, "y": 20, "intent": "打开", "dangerous": False},
             )
-            with pytest.raises(ToolError, match="Alt\\+Tab") as refused:
+            pressed = await client.call_tool(
+                "press_keys",
+                {
+                    "screenshot_id": screenshot_id,
+                    "keys": ["alt", "tab"],
+                    "intent": "切走",
+                    "dangerous": False,
+                },
+            )
+            with pytest.raises(ToolError, match="没有经过人的裁决") as refused:
                 await client.call_tool(
                     "press_keys",
                     {
                         "screenshot_id": screenshot_id,
                         "keys": ["alt", "tab"],
                         "intent": "切走",
-                        "dangerous": False,
+                        "dangerous": True,
                     },
                 )
             launched = await client.call_tool(
@@ -633,14 +676,16 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
                     "process_name": "notepad.exe",
                 }
             ]
-            return dict(clicked.data), str(refused.value), dict(launched.data)
+            return dict(clicked.data), dict(pressed.data), str(refused.value), dict(launched.data)
 
-    clicked, refusal, launched = asyncio.run(call())
+    clicked, pressed, refusal, launched = asyncio.run(call())
 
     assert clicked["screen_point"] == {"x": 110, "y": 70}
     assert desktop.double_clicks == [(110, 70)]
-    assert desktop.chords == []
-    assert "Alt+Tab" in refusal
+    assert desktop.chords == [("alt", "tab")]
+    assert pressed["keys"] == ["alt", "tab"]
+    assert "交给系统" not in refusal
+    assert "离开任务作用域" not in refusal
     assert launched["window"]["handle"] == 9
     assert desktop.launched == ["calc.exe"]
     by_tool = {record["tool"]: record for record in desktop.action_log()}
@@ -649,11 +694,15 @@ def test_双击右键按键与启动经由_MCP_调用_成功拦截都记入日�
         "succeeded",
     )
     assert by_tool["double_click"]["intent"] == "打开"
-    assert (by_tool["press_keys"]["verdict"], by_tool["press_keys"]["outcome"]) == (
-        "intercepted",
-        "not_executed",
-    )
-    assert by_tool["press_keys"]["target"]["keys"] == ["alt", "tab"]
+    press_records = [record for record in desktop.action_log() if record["tool"] == "press_keys"]
+    assert [(record["verdict"], record["outcome"]) for record in press_records] == [
+        ("allowed", "succeeded"),
+        ("intercepted", "not_executed"),
+    ]
+    assert [record["target"]["keys"] for record in press_records] == [
+        ["alt", "tab"],
+        ["alt", "tab"],
+    ]
     assert (by_tool["launch_app"]["verdict"], by_tool["launch_app"]["outcome"]) == (
         "allowed",
         "succeeded",

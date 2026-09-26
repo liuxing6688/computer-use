@@ -42,8 +42,8 @@ INSTRUCTIONS = f"""\
 落在任务作用域内的高危窗口（终端、系统设置、资源管理器、Agent 自身所在的窗口）上时，
 须把 `dangerous` 设为 true 重新调用，由人在 Claude Code 中确认后才执行。
 认不出所属进程的窗口一律拒绝。
-`press_keys` 发送组合键与功能键。Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete
-会离开目标窗口，一律拒绝。
+`press_keys` 发送组合键与功能键，包括 Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete。
+这些按键与其他按键一样：落到任务作用域外，或被判为危险动作时不执行。
 `launch_app` 启动一个 .exe 并等待它的新窗口；超时会说明期间出现了哪些别的窗口。
 新窗口不会自动进入任务作用域。启动终端、系统设置或资源管理器须经人确认后才启动。
 单击、双击、右键、拖拽、滚动、输入文本、按键、启动应用在执行成功后都返回变化说明：
@@ -468,8 +468,10 @@ def create_server(desktop: DesktopPort) -> FastMCP:
 
         `keys` 按按下的顺序给出，例如 `["ctrl", "s"]`、`["f5"]`、`["alt", "f4"]`。
         字母、数字、功能键 f1–f12，以及 enter、tab、escape、space、backspace、delete、insert、
-        home、end、pageup、pagedown、方向键都可以。先把该窗口带到前台，没能到前台就不按。
-        Windows 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete 会离开目标窗口，一律拒绝。
+        home、end、pageup、pagedown、方向键、Windows 键都可以。
+        Alt+Tab、Alt+Esc、Ctrl+Esc、Ctrl+Alt+Delete 也可以送出。
+        先把该窗口带到前台，没能到前台就不按。
+        落到任务作用域外，或被判为危险动作时不执行。
         `intent` 用一句话说明这次按键要做什么，记入动作日志。
         执行成功后返回送到的窗口、按键与变化说明。
         """
