@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from computer_use.action_log import Intercepted
-from computer_use.desktop import ForegroundError, Rect
+from computer_use.desktop import Rect
 from computer_use.hook import decide
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import ScopeError, TaskScope
@@ -163,21 +163,6 @@ def test_尚未声明任务作用域时点击被拦截() -> None:
     with pytest.raises(Intercepted, match="尚未声明任务作用域"):
         click(desktop, screenshots, TaskScope(), _observed(desktop, screenshots, 1), 10, 10)
 
-    assert desktop.clicks == []
-
-
-def test_窗口没能来到前台时不注入单击() -> None:
-    desktop = FakeDesktop(
-        [window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240))]
-    )
-    screenshots, scope = Screenshots(), TaskScope()
-    declare_scope(desktop, scope, [1])
-
-    desktop.focus_fails = True
-    with pytest.raises(ForegroundError, match="前台"):
-        click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 20)
-
-    assert desktop.trace == [("focus", 1)]
     assert desktop.clicks == []
 
 

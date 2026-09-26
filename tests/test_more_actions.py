@@ -21,6 +21,7 @@ from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import TaskScope
 from computer_use.server import create_server
 from computer_use.tools import (
+    click,
     declare_scope,
     double_click,
     drag,
@@ -136,33 +137,60 @@ def test_拖拽跨两扇窗口时先把起点窗口带到前台() -> None:
     assert desktop.drags == [(700, 300, 510, 210)]
 
 
-def test_窗口没能来到前台时不注入双击右键拖拽和滚动() -> None:
+def _单击(
+    desktop: FakeDesktop, screenshots: Screenshots, scope: TaskScope, screenshot_id: str
+) -> None:
+    click(desktop, screenshots, scope, screenshot_id, 10, 20, intent="点一下", dangerous=False)
+
+
+def _双击(
+    desktop: FakeDesktop, screenshots: Screenshots, scope: TaskScope, screenshot_id: str
+) -> None:
+    double_click(desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开", dangerous=False)
+
+
+def _右键(
+    desktop: FakeDesktop, screenshots: Screenshots, scope: TaskScope, screenshot_id: str
+) -> None:
+    right_click(desktop, screenshots, scope, screenshot_id, 10, 20, intent="菜单", dangerous=False)
+
+
+def _拖拽(
+    desktop: FakeDesktop, screenshots: Screenshots, scope: TaskScope, screenshot_id: str
+) -> None:
+    drag(
+        desktop, screenshots, scope, screenshot_id, 10, 20, 30, 40, intent="框选", dangerous=False
+    )
+
+
+def _滚动(
+    desktop: FakeDesktop, screenshots: Screenshots, scope: TaskScope, screenshot_id: str
+) -> None:
+    scroll(desktop, screenshots, scope, screenshot_id, 10, 20, -1, intent="翻页", dangerous=False)
+
+
+@pytest.mark.parametrize(
+    "act",
+    [_单击, _双击, _右键, _拖拽, _滚动],
+    ids=["单击", "双击", "右键", "拖拽", "滚动"],
+)
+def test_窗口没能来到前台时不注入鼠标(
+    act: Callable[[FakeDesktop, Screenshots, TaskScope, str], None],
+) -> None:
     desktop, screenshots, scope, screenshot_id = _ready()
     desktop.focus_fails = True
 
     with pytest.raises(ForegroundError, match="前台"):
-        double_click(
-            desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开", dangerous=False
-        )
-    with pytest.raises(ForegroundError, match="前台"):
-        right_click(
-            desktop, screenshots, scope, screenshot_id, 10, 20, intent="菜单", dangerous=False
-        )
-    with pytest.raises(ForegroundError, match="前台"):
-        drag(
-            desktop, screenshots, scope, screenshot_id, 10, 20, 30, 40,
-            intent="框选", dangerous=False,
-        )
-    with pytest.raises(ForegroundError, match="前台"):
-        scroll(
-            desktop, screenshots, scope, screenshot_id, 10, 20, -1, intent="翻页", dangerous=False
-        )
+        act(desktop, screenshots, scope, screenshot_id)
 
-    assert desktop.trace == [("focus", 1), ("focus", 1), ("focus", 1), ("focus", 1)]
-    assert desktop.double_clicks == []
-    assert desktop.right_clicks == []
-    assert desktop.drags == []
-    assert desktop.scrolls == []
+    assert desktop.trace == [("focus", 1)]
+    assert (
+        desktop.clicks,
+        desktop.double_clicks,
+        desktop.right_clicks,
+        desktop.drags,
+        desktop.scrolls,
+    ) == ([], [], [], [], [])
 
 
 def test_拖拽终点在作用域外时不注入() -> None:

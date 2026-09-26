@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
 
 from computer_use.action_log import Intercepted
 from computer_use.confirmation import (
@@ -23,6 +23,8 @@ from computer_use.pace import Pace, budget_verdict
 from computer_use.scope import TaskScope, landing_risk, risk_of_process
 from computer_use.untrusted import quoted_window
 from computer_use.windows import operable_windows
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ def click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="click", arguments=arguments, pace=pace,
     )
-    change = _inject(
+    _, change = _inject(
         desktop, gate, lambda: desktop.click(landed.x, landed.y), window=landed.window
     )
     return landed, change
@@ -121,7 +123,7 @@ def double_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="double_click", arguments=arguments, pace=pace,
     )
-    change = _inject(
+    _, change = _inject(
         desktop, gate, lambda: desktop.double_click(landed.x, landed.y), window=landed.window
     )
     return landed, change
@@ -156,7 +158,7 @@ def right_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="right_click", arguments=arguments, pace=pace,
     )
-    change = _inject(
+    _, change = _inject(
         desktop, gate, lambda: desktop.right_click(landed.x, landed.y), window=landed.window
     )
     return landed, change
@@ -203,7 +205,7 @@ def drag(
         desktop, screenshots, scope, screenshot_id, [(x, y), (to_x, to_y)],
         tool="drag", arguments=arguments, pace=pace,
     )
-    change = _inject(
+    _, change = _inject(
         desktop,
         gate,
         lambda: desktop.drag(start.x, start.y, end.x, end.y),
@@ -245,7 +247,7 @@ def scroll(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="scroll", arguments=arguments, pace=pace,
     )
-    change = _inject(
+    _, change = _inject(
         desktop, gate, lambda: desktop.scroll(landed.x, landed.y, notches), window=landed.window
     )
     return landed, change
@@ -295,15 +297,8 @@ def press_keys(
     require_ruling(desktop, "press_keys", arguments, verdict)
     confirm_outbound(desktop, scope, ConfirmSubject(intent=intent, nearby=None, window=window))
     gate.wait_to_inject(cleared=cleared)
-    before = _before(desktop)
-    try:
-        desktop.focus(window.handle)
-        desktop.press_keys(chord)
-    except BaseException:
-        gate.abandon()
-        raise
-    gate.mark_injected()
-    return Pressed(window=window, keys=chord), _change_since(desktop, before)
+    _, change = _inject(desktop, gate, lambda: desktop.press_keys(chord), window=window)
+    return Pressed(window=window, keys=chord), change
 
 
 @dataclass(frozen=True)
@@ -408,16 +403,11 @@ def type_text(
         verdict = verdict | budget_verdict()
     require_ruling(desktop, "type_text", arguments, verdict)
     gate.wait_to_inject(cleared=cleared)
-    before = _before(desktop)
-    try:
-        desktop.focus(window.handle)
-        tier, clipboard_used = _deliver(desktop, text, gate)
-    except BaseException:
-        gate.abandon()
-        raise
-    gate.mark_injected()
+    (tier, clipboard_used), change = _inject(
+        desktop, gate, lambda: _deliver(desktop, text, gate), window=window
+    )
     scope.remember_text(window.handle, text)
-    return Typed(window=window, tier=tier, clipboard_used=clipboard_used), _change_since(desktop, before)
+    return Typed(window=window, tier=tier, clipboard_used=clipboard_used), change
 
 
 def resume(desktop: DesktopPort, pace: Pace) -> str:
@@ -528,22 +518,22 @@ def _appeared(window: Window) -> bool:
 
 
 def _inject(
-    desktop: DesktopPort, gate: Pace, inject: Callable[[], None], *, window: Window
-) -> Change:
-    """先把 `window` 带到前台再注入。带不到前台则不注入。
+    desktop: DesktopPort, gate: Pace, inject: Callable[[], T], *, window: Window
+) -> tuple[T, Change]:
+    """先把 `window` 带到前台，再执行 `inject`。带不到前台则不执行。
 
-    成功之后给出相对注入前的变化说明。失败时不给出。
+    成功时返回 `inject` 的结果，以及相对注入前的变化说明。失败时不返回。
     """
 
     before = _before(desktop)
     try:
         desktop.focus(window.handle)
-        inject()
+        produced = inject()
     except BaseException:
         gate.abandon()
         raise
     gate.mark_injected()
-    return _change_since(desktop, before)
+    return produced, _change_since(desktop, before)
 
 
 _MODIFIERS = frozenset({"ctrl", "alt", "shift", "win"})
