@@ -96,11 +96,8 @@ def test_落点附近没有高危词时不判为危险(text: str) -> None:
     assert not judge_nearby_text(text).dangerous
 
 
-def test_读不出落点附近的文字时判为危险() -> None:
-    verdict = judge_nearby_text(None)
-
-    assert verdict.dangerous
-    assert any("识别" in reason for reason in verdict.reasons)
+def test_读不出落点附近的文字时不因此判为危险() -> None:
+    assert not judge_nearby_text(None).dangerous
 
 
 def test_两条判据取并集() -> None:
@@ -166,12 +163,21 @@ def test_模型自报为危险而未经人裁决时拦截_原样重试也拦截(
     assert desktop.clicks == []
 
 
-def test_读不出落点附近的文字时拦截() -> None:
+def test_读不出落点附近的文字且模型自报不危险时不因此拦截_点击得以执行() -> None:
     desktop = _desktop(texts=[], unreadable=True)
     screenshots, scope, screenshot_id = _ready(desktop)
 
-    with pytest.raises(Intercepted, match="识别"):
-        click(desktop, screenshots, scope, screenshot_id, 100, 100, intent="点编辑区", dangerous=False)
+    click(desktop, screenshots, scope, screenshot_id, 100, 100, intent="点编辑区", dangerous=False)
+
+    assert desktop.clicks == [(100, 100)]
+
+
+def test_读不出落点附近的文字时_模型自报危险仍须经人确认() -> None:
+    desktop = _desktop(texts=[], unreadable=True)
+    screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="人"):
+        click(desktop, screenshots, scope, screenshot_id, 100, 100, intent="点编辑区", dangerous=True)
 
     assert desktop.clicks == []
 

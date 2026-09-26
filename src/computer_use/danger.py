@@ -127,13 +127,13 @@ _SEND_WORDS = frozenset({"发送", "提交", "发布", "send", "submit", "publis
 
 
 def judge_nearby_text(text: str | None) -> Verdict:
-    """凭落点附近读出的文字判定：含高危词即判为危险。`None` 表示没能读出来，同样判为危险。
+    """凭落点附近读出的文字判定：含高危词即判为危险。`None` 表示没能读出来，不因此判为危险。
 
     OCR 常在汉字之间插空格，中文词去掉空白后按子串匹配；英文词按整词匹配，免得 `Book` 里读出 `ok`。
     """
 
     if text is None:
-        return Verdict(("无法识别落点附近的文字，无从排除危险",))
+        return Verdict()
     return Verdict(tuple(f"落点附近有高危词「{w}」" for w in _matched(text, _CJK_WORDS, _LATIN_WORDS)))
 
 
