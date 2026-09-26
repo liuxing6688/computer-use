@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Collection, Literal, Mapping, Sequence
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from computer_use.desktop import (
     Capture,
@@ -27,7 +27,15 @@ from computer_use.desktop import (
     Window,
     WindowUnavailable,
 )
-from computer_use.region_diff import diff_region
+
+_TARGET_RADIUS = 48
+"""目标区域：落点上下左右各这么多物理像素，界面变化只在这块区域里才算数。"""
+
+_PIXEL_TOLERANCE = 32
+"""一个像素任一通道的差不超过此值时视为没变，悬停一类的轻微变色不算。"""
+
+_CHANGED_FRACTION = 0.02
+"""目标区域里变了的像素超过这个比例才算实质变化；闪烁的光标只占百分之一不到。"""
 
 
 @dataclass(frozen=True)
@@ -48,7 +56,8 @@ class FakeDesktop:
     `texts` 是屏幕上写着的文字及其屏幕矩形，文字识别读出中心落在识别区域内的那些；
     `unreadable` 为真时文字识别无法进行。
     注入的点击、文本、剪贴板、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
-    `region_change` 若已指定，像素比较直接返回它，不必准备真实像素。
+    `region_change` 若已指定，像素比较直接返回它，不必准备真实像素；
+    否则与 Windows 实现用同一套容差比较。
     """
 
     def __init__(
@@ -120,7 +129,24 @@ class FakeDesktop:
     def compare_region(self, before: Capture, after: Capture, x: int, y: int) -> RegionChange:
         if self.region_change is not None:
             return self.region_change
-        return diff_region(before, after, x, y)
+        rect = before.rect
+        box = (
+            max(x - _TARGET_RADIUS, rect.left) - rect.left,
+            max(y - _TARGET_RADIUS, rect.top) - rect.top,
+            min(x + _TARGET_RADIUS + 1, rect.left + rect.width) - rect.left,
+            min(y + _TARGET_RADIUS + 1, rect.top + rect.height) - rect.top,
+        )
+        original = before.image.convert("RGB").crop(box)
+        current = after.image.convert("RGB").crop(box)
+        red, green, blue = ImageChops.difference(original, current).split()
+        largest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        changed = sum(largest.histogram()[_PIXEL_TOLERANCE + 1 :])
+        total = original.width * original.height
+        return RegionChange(
+            changed=changed > _CHANGED_FRACTION * total,
+            changed_pixels=changed,
+            total_pixels=total,
+        )
 
     def window_at(self, x: int, y: int) -> int | None:
         for w in self._windows:

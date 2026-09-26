@@ -118,7 +118,7 @@ uv run mypy                      # 类型检查
 src/computer_use/
 ├── desktop.py         # DesktopPort：核心与 Windows 之间唯一的缝
 ├── windows.py         # 核心：哪些窗口可操作
-├── observation.py     # 核心：观察、放大、截图 ID 的解析与截图比对
+├── observation.py     # 核心：观察、放大、截图 ID 的解析，以及按比较结果做截图比对
 ├── scope.py           # 核心：任务作用域与命中测试
 ├── danger.py          # 核心：危险动作判定（模型自报 + 落点 OCR）
 ├── interception.py    # 核心：裁决凭据的签发与核验
