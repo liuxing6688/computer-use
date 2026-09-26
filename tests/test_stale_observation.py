@@ -11,7 +11,7 @@ from fastmcp.exceptions import ToolError
 from PIL import Image, ImageDraw
 
 from computer_use.action_log import Intercepted
-from computer_use.desktop import Rect
+from computer_use.desktop import Rect, RegionChange
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import TaskScope
 from computer_use.server import create_server
@@ -82,6 +82,32 @@ def test_界面没变时照常点击() -> None:
     click(desktop, screenshots, scope, screenshot_id, 100, 3 * ROW_HEIGHT + 20)
 
     assert desktop.clicks == [(100, 140)]
+
+
+def test_替身指定目标区域已变化时_相同像素也会拒绝点击() -> None:
+    desktop = FakeDesktop([window(handle=1)])
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id: str = observe_window(desktop, screenshots, 1).metadata["screenshot_id"]
+    desktop.region_change = RegionChange(changed=True, changed_pixels=40, total_pixels=40)
+
+    with pytest.raises(Intercepted, match=r"40/40 个像素不同.*重新观察"):
+        click(desktop, screenshots, scope, screenshot_id, 10, 10)
+
+    assert desktop.clicks == []
+
+
+def test_替身指定目标区域未变化时_像素不同也照常点击() -> None:
+    before = Image.new("RGB", (8, 8), "white")
+    after = Image.new("RGB", (8, 8), "black")
+    desktop, screenshots, scope, screenshot_id = _observe_then_change(
+        before, after, Rect(0, 0, 8, 8)
+    )
+    desktop.region_change = RegionChange(changed=False, changed_pixels=0, total_pixels=64)
+
+    click(desktop, screenshots, scope, screenshot_id, 2, 2)
+
+    assert desktop.clicks == [(2, 2)]
 
 
 def test_光标闪烁不算界面变化_照常点击() -> None:

@@ -56,6 +56,20 @@ class Capture:
     dpi_scale: float
 
 
+@dataclass(frozen=True)
+class RegionChange:
+    """落点周围目标区域的像素比较结果。
+
+    `changed` 为真表示这块区域发生了实质变化。
+    `changed_pixels` 与 `total_pixels` 是变化了的像素数和区域像素总数，供拦截理由引用。
+    核心只使用这个结果，不自己逐像素比较。
+    """
+
+    changed: bool
+    changed_pixels: int
+    total_pixels: int
+
+
 class WindowUnavailable(Exception):
     """指称的窗口不存在，或已经无法采集。"""
 
@@ -124,7 +138,11 @@ class PaceState:
 
 
 class DesktopPort(Protocol):
-    """桌面能提供的原始事实。这里只做采集，不做判定。"""
+    """桌面能提供的原始事实，以及两幅采集之间的像素比较。
+
+    窗口是不是截图里的那个、观察过时了要不要拦截，仍由核心判定。
+    逐像素比较只在这个接口的实现里做，核心只使用比较结果。
+    """
 
     def list_windows(self) -> Sequence[Window]:
         """枚举所有顶层窗口，含不可见与最小化的，交由核心筛选。"""
@@ -134,6 +152,13 @@ class DesktopPort(Protocol):
         """截取一个窗口本身，被其他窗口遮住的部分也照常画出。
 
         窗口已经不在时抛 `WindowUnavailable`。
+        """
+        ...
+
+    def compare_region(self, before: Capture, after: Capture, x: int, y: int) -> RegionChange:
+        """比较两幅采集在屏幕物理像素 `(x, y)` 周围目标区域里的像素。
+
+        `before.rect` 与 `after.rect` 须相同。
         """
         ...
 

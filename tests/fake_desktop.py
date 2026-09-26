@@ -22,10 +22,12 @@ from computer_use.desktop import (
     LaunchError,
     PaceState,
     Rect,
+    RegionChange,
     TextUnreadable,
     Window,
     WindowUnavailable,
 )
+from computer_use.region_diff import diff_region
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class FakeDesktop:
     `texts` 是屏幕上写着的文字及其屏幕矩形，文字识别读出中心落在识别区域内的那些；
     `unreadable` 为真时文字识别无法进行。
     注入的点击、文本、剪贴板、动作日志、留证截图与裁决凭据都留在内存里，可供断言。
+    `region_change` 若已指定，像素比较直接返回它，不必准备真实像素。
     """
 
     def __init__(
@@ -100,6 +103,7 @@ class FakeDesktop:
         self.clipboard_restore_fails = False
         self.paste_fails = False
         self.unicode_fails = False
+        self.region_change: RegionChange | None = None
 
     def list_windows(self) -> Sequence[Window]:
         return tuple(self._windows)
@@ -112,6 +116,11 @@ class FakeDesktop:
         image = self._images.get(handle) or Image.new("RGB", size, "white")
         assert image.size == size, "预置截图须与窗口矩形等大"
         return Capture(image=image, rect=window.rect, dpi_scale=self._dpi_scale)
+
+    def compare_region(self, before: Capture, after: Capture, x: int, y: int) -> RegionChange:
+        if self.region_change is not None:
+            return self.region_change
+        return diff_region(before, after, x, y)
 
     def window_at(self, x: int, y: int) -> int | None:
         for w in self._windows:

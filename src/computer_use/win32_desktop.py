@@ -42,10 +42,12 @@ from computer_use.desktop import (
     LaunchError,
     PaceState,
     Rect,
+    RegionChange,
     TextUnreadable,
     Window,
     WindowUnavailable,
 )
+from computer_use.region_diff import diff_region
 
 _T = TypeVar("_T")
 _ClipData = str | bytes | tuple[str, ...]
@@ -244,6 +246,9 @@ class Win32Desktop:
         return Capture(
             image=image, rect=frame, dpi_scale=_user32.GetDpiForWindow(handle) / 96
         )
+
+    def compare_region(self, before: Capture, after: Capture, x: int, y: int) -> RegionChange:
+        return diff_region(before, after, x, y)
 
     def window_at(self, x: int, y: int) -> int | None:
         child = _user32.WindowFromPoint(wintypes.POINT(x, y))
