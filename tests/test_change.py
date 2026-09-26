@@ -34,6 +34,7 @@ def test_点击成功且桌面无变化时_说明前台没变也没有新窗口(
     desktop = FakeDesktop(
         [window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240))]
     )
+    desktop.foreground = 1
     screenshots, scope = Screenshots(), TaskScope()
     declare_scope(desktop, scope, [1])
     screenshot_id: str = observe_window(desktop, screenshots, 1).metadata["screenshot_id"]
@@ -43,6 +44,22 @@ def test_点击成功且桌面无变化时_说明前台没变也没有新窗口(
     )
 
     assert result["change"] == {"foreground_changed": False, "new_windows": []}
+
+
+def test_点击把目标窗口带到前台时_说明前台变了且没有新窗口() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240))]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+    screenshot_id: str = observe_window(desktop, screenshots, 1).metadata["screenshot_id"]
+
+    result = click(
+        desktop, screenshots, scope, screenshot_id, 10, 20, intent="点一下", dangerous=False
+    )
+
+    assert desktop.foreground == 1
+    assert result["change"] == {"foreground_changed": True, "new_windows": []}
 
 
 def test_点击后前台窗口换成另一个时_说明前台变了且没有新窗口() -> None:

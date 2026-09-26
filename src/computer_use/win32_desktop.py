@@ -311,7 +311,7 @@ class Win32Desktop:
     def click(self, x: int, y: int) -> None:
         """把光标移到 `(x, y)` 再按下、抬起左键。
 
-        鼠标输入送往光标下的窗口并顺带激活它，不必先 `SetForegroundWindow`；键盘输入才须如此。
+        调用方须已把目标窗口带到前台。鼠标事件送往光标下的窗口。
         """
 
         _place(x, y)

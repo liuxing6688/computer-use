@@ -210,7 +210,7 @@ class DesktopPort(Protocol):
         ...
 
     def focus(self, handle: int) -> None:
-        """把窗口带到前台，使随后的键盘输入落进它。做不到时抛 `ForegroundError`。"""
+        """把窗口带到前台，使随后的输入落进它。做不到时抛 `ForegroundError`。"""
         ...
 
     def read_clipboard(self) -> Clipboard:

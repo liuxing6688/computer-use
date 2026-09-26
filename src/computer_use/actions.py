@@ -71,6 +71,7 @@ def click(
     落点未通过命中测试、或截图之后落点附近的界面已经变化时抛 `Intercepted`，裁决凭据也救不回来；
     模型自报为危险、又没有经人裁决时同样抛 `Intercepted`。
     模型自报不危险、但落点附近有高危词时，同一次调用弹出原生对话框，人拒绝或超时则抛 `Intercepted`。
+    注入前先把落点窗口带到前台；带不到前台时不注入。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -85,7 +86,9 @@ def click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="click", arguments=arguments, pace=pace,
     )
-    change = _inject(desktop, gate, lambda: desktop.click(landed.x, landed.y))
+    change = _inject(
+        desktop, gate, lambda: desktop.click(landed.x, landed.y), window=landed.window
+    )
     return landed, change
 
 
@@ -103,6 +106,7 @@ def double_click(
 ) -> tuple[Landed, Change]:
     """在截图 `screenshot_id` 的像素 `(x, y)` 处双击。放行条件与单击相同。
 
+    注入前先把落点窗口带到前台；带不到前台时不注入。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -117,7 +121,9 @@ def double_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="double_click", arguments=arguments, pace=pace,
     )
-    change = _inject(desktop, gate, lambda: desktop.double_click(landed.x, landed.y))
+    change = _inject(
+        desktop, gate, lambda: desktop.double_click(landed.x, landed.y), window=landed.window
+    )
     return landed, change
 
 
@@ -135,6 +141,7 @@ def right_click(
 ) -> tuple[Landed, Change]:
     """在截图 `screenshot_id` 的像素 `(x, y)` 处单击右键。放行条件与单击相同。
 
+    注入前先把落点窗口带到前台；带不到前台时不注入。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -149,7 +156,9 @@ def right_click(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="right_click", arguments=arguments, pace=pace,
     )
-    change = _inject(desktop, gate, lambda: desktop.right_click(landed.x, landed.y))
+    change = _inject(
+        desktop, gate, lambda: desktop.right_click(landed.x, landed.y), window=landed.window
+    )
     return landed, change
 
 
@@ -177,6 +186,7 @@ def drag(
 ) -> tuple[Dragged, Change]:
     """从截图像素 `(x, y)` 拖到 `(to_x, to_y)`。两个落点都要在任务作用域内。
 
+    注入前先把起点窗口带到前台；带不到前台时不注入。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -193,7 +203,12 @@ def drag(
         desktop, screenshots, scope, screenshot_id, [(x, y), (to_x, to_y)],
         tool="drag", arguments=arguments, pace=pace,
     )
-    change = _inject(desktop, gate, lambda: desktop.drag(start.x, start.y, end.x, end.y))
+    change = _inject(
+        desktop,
+        gate,
+        lambda: desktop.drag(start.x, start.y, end.x, end.y),
+        window=start.window,
+    )
     return Dragged(start=start, end=end), change
 
 
@@ -212,6 +227,7 @@ def scroll(
 ) -> tuple[Landed, Change]:
     """在截图像素 `(x, y)` 处滚动。`notches` 为正向上、为负向下。
 
+    注入前先把落点窗口带到前台；带不到前台时不注入。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -229,7 +245,9 @@ def scroll(
         desktop, screenshots, scope, screenshot_id, [(x, y)],
         tool="scroll", arguments=arguments, pace=pace,
     )
-    change = _inject(desktop, gate, lambda: desktop.scroll(landed.x, landed.y, notches))
+    change = _inject(
+        desktop, gate, lambda: desktop.scroll(landed.x, landed.y, notches), window=landed.window
+    )
     return landed, change
 
 
@@ -509,11 +527,17 @@ def _appeared(window: Window) -> bool:
     return window.is_visible and not window.is_minimized
 
 
-def _inject(desktop: DesktopPort, gate: Pace, inject: Callable[[], None]) -> Change:
-    """注入，并在成功之后给出相对注入前的变化说明。失败时不给出。"""
+def _inject(
+    desktop: DesktopPort, gate: Pace, inject: Callable[[], None], *, window: Window
+) -> Change:
+    """先把 `window` 带到前台再注入。带不到前台则不注入。
+
+    成功之后给出相对注入前的变化说明。失败时不给出。
+    """
 
     before = _before(desktop)
     try:
+        desktop.focus(window.handle)
         inject()
     except BaseException:
         gate.abandon()

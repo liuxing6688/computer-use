@@ -77,6 +77,7 @@ def test_双击按截图像素坐标落到屏幕上() -> None:
         desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开文件", dangerous=False
     )
 
+    assert desktop.trace == [("focus", 1)]
     assert desktop.double_clicks == [(510, 220)]
     assert result["screen_point"] == {"x": 510, "y": 220}
     assert result["window"]["handle"] == 1
@@ -89,6 +90,7 @@ def test_右键按截图像素坐标落到屏幕上() -> None:
         desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开菜单", dangerous=False
     )
 
+    assert desktop.trace == [("focus", 1)]
     assert desktop.right_clicks == [(510, 220)]
 
 
@@ -108,9 +110,59 @@ def test_拖拽的起点和终点都换算到屏幕() -> None:
         dangerous=False,
     )
 
+    assert desktop.trace == [("focus", 1)]
     assert desktop.drags == [(510, 220, 530, 240)]
     assert result["screen_point"] == {"x": 510, "y": 220}
     assert result["to"]["screen_point"] == {"x": 530, "y": 240}
+
+
+def test_拖拽跨两扇窗口时先把起点窗口带到前台() -> None:
+    desktop = FakeDesktop(
+        [
+            window(handle=2, title="另一扇", rect=Rect(500, 200, 40, 40)),
+            window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240)),
+        ]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1, 2])
+    screenshot_id = _shot(desktop, screenshots, 1)
+
+    drag(
+        desktop, screenshots, scope, screenshot_id, 200, 100, 10, 10,
+        intent="拖到旁边", dangerous=False,
+    )
+
+    assert desktop.trace == [("focus", 1)]
+    assert desktop.drags == [(700, 300, 510, 210)]
+
+
+def test_窗口没能来到前台时不注入双击右键拖拽和滚动() -> None:
+    desktop, screenshots, scope, screenshot_id = _ready()
+    desktop.focus_fails = True
+
+    with pytest.raises(ForegroundError, match="前台"):
+        double_click(
+            desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开", dangerous=False
+        )
+    with pytest.raises(ForegroundError, match="前台"):
+        right_click(
+            desktop, screenshots, scope, screenshot_id, 10, 20, intent="菜单", dangerous=False
+        )
+    with pytest.raises(ForegroundError, match="前台"):
+        drag(
+            desktop, screenshots, scope, screenshot_id, 10, 20, 30, 40,
+            intent="框选", dangerous=False,
+        )
+    with pytest.raises(ForegroundError, match="前台"):
+        scroll(
+            desktop, screenshots, scope, screenshot_id, 10, 20, -1, intent="翻页", dangerous=False
+        )
+
+    assert desktop.trace == [("focus", 1), ("focus", 1), ("focus", 1), ("focus", 1)]
+    assert desktop.double_clicks == []
+    assert desktop.right_clicks == []
+    assert desktop.drags == []
+    assert desktop.scrolls == []
 
 
 def test_拖拽终点在作用域外时不注入() -> None:
@@ -128,6 +180,7 @@ def test_拖拽终点在作用域外时不注入() -> None:
             intent="拖出去", dangerous=False,
         )
 
+    assert desktop.trace == []
     assert desktop.drags == []
 
 
@@ -145,6 +198,7 @@ def test_落点被挡住时右键被拦截且不注入() -> None:
             desktop, screenshots, scope, screenshot_id, 10, 20, intent="打开菜单", dangerous=False
         )
 
+    assert desktop.trace == []
     assert desktop.right_clicks == []
 
 
@@ -251,11 +305,13 @@ def test_滚动按凹口数注入_零格被拒绝() -> None:
         desktop, screenshots, scope, screenshot_id, 10, 20, -2, intent="往下翻", dangerous=False
     )
 
+    assert desktop.trace == [("focus", 1)]
     assert desktop.scrolls == [(510, 220, -2)]
     with pytest.raises(ActionError, match="滚动"):
         scroll(
             desktop, screenshots, scope, screenshot_id, 10, 20, 0, intent="空滚", dangerous=False
         )
+    assert desktop.trace == [("focus", 1)]
     assert desktop.scrolls == [(510, 220, -2)]
 
 

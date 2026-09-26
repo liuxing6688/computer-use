@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from computer_use.action_log import Intercepted
-from computer_use.desktop import Rect
+from computer_use.desktop import ForegroundError, Rect
 from computer_use.hook import decide
 from computer_use.observation import ObservationError, Screenshots
 from computer_use.scope import ScopeError, TaskScope
@@ -105,6 +105,7 @@ def test_点击作用域内的窗口_按截图像素坐标落到屏幕上() -> N
 
     result = click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 20)
 
+    assert desktop.trace == [("focus", 1)]
     assert desktop.clicks == [(510, 220)]
     assert result == {
         "window": {
@@ -113,7 +114,7 @@ def test_点击作用域内的窗口_按截图像素坐标落到屏幕上() -> N
             "process_name": "notepad.exe",
         },
         "screen_point": {"x": 510, "y": 220},
-        "change": {"foreground_changed": False, "new_windows": []},
+        "change": {"foreground_changed": True, "new_windows": []},
     }
 
 
@@ -165,6 +166,21 @@ def test_尚未声明任务作用域时点击被拦截() -> None:
     assert desktop.clicks == []
 
 
+def test_窗口没能来到前台时不注入单击() -> None:
+    desktop = FakeDesktop(
+        [window(handle=1, title="无标题 - 记事本", rect=Rect(500, 200, 320, 240))]
+    )
+    screenshots, scope = Screenshots(), TaskScope()
+    declare_scope(desktop, scope, [1])
+
+    desktop.focus_fails = True
+    with pytest.raises(ForegroundError, match="前台"):
+        click(desktop, screenshots, scope, _observed(desktop, screenshots, 1), 10, 20)
+
+    assert desktop.trace == [("focus", 1)]
+    assert desktop.clicks == []
+
+
 def test_落点被作用域外的窗口挡住时点击被拦截_理由指明落点窗口() -> None:
     desktop = FakeDesktop(
         [
@@ -180,8 +196,10 @@ def test_落点被作用域外的窗口挡住时点击被拦截_理由指明落�
         click(desktop, screenshots, scope, screenshot_id, 50, 50)
 
     assert "<untrusted-screen>弹出的广告</untrusted-screen>" in str(intercepted.value)
+    assert desktop.trace == []
     assert desktop.clicks == []
     click(desktop, screenshots, scope, screenshot_id, 200, 200)
+    assert desktop.trace == [("focus", 1)]
     assert desktop.clicks == [(200, 200)]
 
 
