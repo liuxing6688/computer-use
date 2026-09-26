@@ -128,18 +128,40 @@ def test_删除经过裁决后执行且不弹原生对话框() -> None:
     assert desktop.clicks == [(630, 412)]
 
 
-def test_模型把外发自报成不危险时先被拦下且对话框还没弹() -> None:
+def test_模型把外发自报成不危险时同一次调用弹原生对话框_人确认后才执行() -> None:
     desktop = _desktop()
     screenshots, scope, screenshot_id = _ready(desktop)
 
-    with pytest.raises(Intercepted, match="发送"):
+    click(
+        desktop, screenshots, scope, screenshot_id, 630, 412,
+        intent="点一下", dangerous=False,
+    )
+
+    assert desktop.clicks == [(630, 412)]
+    assert desktop.tickets == {}
+    [dialog] = desktop.dialogs
+    assert dialog.timeout == 60
+    assert "发送" in dialog.message
+    assert dialog.image is not None
+    assert "已输入的内容" in dialog.message
+
+
+def test_模型把外发自报成不危险时人拒绝则不执行_也不要求改标志重试() -> None:
+    desktop = _desktop()
+    desktop.dialog_reply = False
+    screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="拒绝") as intercepted:
         click(
             desktop, screenshots, scope, screenshot_id, 630, 412,
             intent="点一下", dangerous=False,
         )
 
+    message = str(intercepted.value)
+    assert "重新调用" not in message
+    assert "dangerous" not in message
     assert desktop.clicks == []
-    assert desktop.dialogs == []
+    assert len(desktop.dialogs) == 1
 
 
 def test_打进窗口的文字本身不弹确认() -> None:

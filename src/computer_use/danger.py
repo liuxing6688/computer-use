@@ -126,15 +126,21 @@ _SEND_WORDS = frozenset({"发送", "提交", "发布", "send", "submit", "publis
 """外发里「把已经输入的内容发出去」的那一类：确认时要同时摆上截图和这段内容。"""
 
 
-def judge_nearby_text(text: str | None) -> Verdict:
-    """凭落点附近读出的文字判定：含高危词即判为危险。`None` 表示没能读出来，不因此判为危险。
+def nearby_risk_words(text: str | None) -> tuple[str, ...]:
+    """落点附近文字里的高危词，按出现顺序。`None` 表示没能读出来，没有词。
 
     OCR 常在汉字之间插空格，中文词去掉空白后按子串匹配；英文词按整词匹配，免得 `Book` 里读出 `ok`。
     """
 
     if text is None:
-        return Verdict()
-    return Verdict(tuple(f"落点附近有高危词「{w}」" for w in _matched(text, _CJK_WORDS, _LATIN_WORDS)))
+        return ()
+    return _matched(text, _CJK_WORDS, _LATIN_WORDS)
+
+
+def judge_nearby_text(text: str | None) -> Verdict:
+    """凭落点附近读出的文字判定：含高危词即判为危险。`None` 表示没能读出来，不因此判为危险。"""
+
+    return Verdict(tuple(f"落点附近有高危词「{w}」" for w in nearby_risk_words(text)))
 
 
 def outbound_hits(*texts: str | None) -> tuple[str, ...]:

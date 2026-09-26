@@ -1,7 +1,8 @@
-"""核心：外发动作、切换任务作用域与永久删除的原生确认。
+"""核心：外发动作、切换任务作用域、永久删除，以及未自报高危词的原生确认。
 
-常规危险动作走 PreToolUse hook。外发动作、切换任务作用域，以及永久删除，
-在那之后再弹一个系统对话框，模型正在等这次调用返回，插不进手。拒绝和超时都不执行。
+常规危险动作走 PreToolUse hook。外发动作、切换任务作用域、永久删除，
+以及模型自报不危险但落点附近读到高危词，都在执行前弹一个系统对话框。
+模型正在等这次调用返回，插不进手。拒绝和超时都不执行。
 """
 
 from __future__ import annotations
@@ -9,12 +10,45 @@ from __future__ import annotations
 from PIL.Image import Image
 
 from computer_use.action_log import Intercepted
-from computer_use.danger import outbound_hits, sends_content
+from computer_use.danger import nearby_risk_words, outbound_hits, sends_content
 from computer_use.desktop import DesktopPort, Window, WindowUnavailable
 from computer_use.scope import TaskScope
 
 CONFIRM_TIMEOUT = 60.0
 """人要看截图和已输入的内容，给一分钟。过了按拒绝。"""
+
+
+def confirm_nearby_words(
+    desktop: DesktopPort,
+    *,
+    intent: str,
+    nearby: str | None,
+    window: Window,
+) -> None:
+    """模型自报不危险、落点附近却有高危词时，同一次调用里弹原生对话框。
+
+    外发词由 `confirm_outbound` 问，这里不重复问。附近没有这类词时不弹。
+    人拒绝或超时抛 `Intercepted`，动作不得执行。
+    """
+
+    covered = set(outbound_hits(nearby))
+    words = tuple(word for word in nearby_risk_words(nearby) if word not in covered)
+    if not words:
+        return
+    listed = "、".join(words)
+    _ask(
+        desktop,
+        title="高危词需要确认",
+        message=(
+            f"落点附近读到高危词（{listed}）。\n"
+            f"意图：{intent}\n"
+            f"窗口：「{window.title}」（{window.process_name or '未知进程'}，句柄 {window.handle}）\n"
+            "拒绝或超时则不执行。"
+        ),
+        image=None,
+        rejected="用户拒绝了这次高危词确认，动作未执行",
+        timed_out="确认对话框超时，按拒绝处理，动作未执行",
+    )
 
 
 def confirm_outbound(

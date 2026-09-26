@@ -10,13 +10,13 @@ import asyncio
 import ctypes
 import io
 import json
-import os
 import subprocess
 import sys
+import threading
 import time
 from ctypes import wintypes
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 
 import pytest
 import win32clipboard
@@ -165,60 +165,94 @@ def test_点击按截图像素坐标落在记事本上_缩放下落点一致(
     ]
 
 
-def test_点在写着高危词的地方_真实_OCR_拦下未自报的点击_经_hook_交人裁决后放行(
-    notepad: subprocess.Popen[bytes], tmp_path: Path
-) -> None:
-    desktop = Win32Desktop(data_dir=tmp_path / "computer-use")
-    window = _await_notepad(lambda: list_windows(desktop))
-    edit = win32gui.FindWindowEx(window["handle"], 0, "Edit", None)
-    assert edit, "没找到记事本的编辑框"
-    # 留出空白、把光标挪到末尾：光标竖线贴着「删」时 OCR 读不出这个字，真实按钮的文字四周都有留白。
-    # types-pywin32 把 SetWindowText 标成无参，运行时签名是 (hwnd, text)。
-    win32gui.SetWindowText(edit, "    删除    ")  # type: ignore[call-arg]
-    win32gui.SendMessage(edit, win32con.EM_SETSEL, -1, -1)
-    edit_left, edit_top, _, _ = win32gui.GetWindowRect(edit)
+_WORD_WINDOW = """
+import ctypes, sys, threading, win32gui, win32con
+from ctypes import wintypes
+ctypes.windll.user32.SetProcessDpiAwarenessContext(wintypes.HANDLE(-4))
+hinst = win32gui.GetModuleHandle(None)
+hwnd = win32gui.CreateWindow(
+    "STATIC", "高危词样本",
+    win32con.WS_POPUP | win32con.WS_VISIBLE | win32con.WS_CAPTION,
+    200, 200, 420, 220, 0, 0, hinst, None,
+)
+win32gui.CreateWindow(
+    "STATIC", "    删除    ",
+    win32con.WS_CHILD | win32con.WS_VISIBLE,
+    30, 50, 320, 80, hwnd, 0, hinst, None,
+)
+win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+win32gui.UpdateWindow(hwnd)
+sys.stdout.write(str(hwnd) + "\\n")
+sys.stdout.flush()
 
-    async def call() -> tuple[str, dict[str, Any]]:
-        async with Client(create_server(desktop)) as client:
-            await client.call_tool("declare_scope", {"handles": [window["handle"]]})
-            observed = await client.call_tool("observe_window", {"handle": window["handle"]})
-            meta = observed.data
-            request = {
-                "screenshot_id": meta["screenshot_id"],
-                "x": round((edit_left + 50 * meta["dpi_scale"] - meta["screen_offset"]["x"]) * meta["scale"]),
-                "y": round((edit_top + 10 * meta["dpi_scale"] - meta["screen_offset"]["y"]) * meta["scale"]),
-                "intent": "点编辑区里的字",
-                "dangerous": False,
-            }
-            with pytest.raises(ToolError) as refused:
-                await client.call_tool("click", request)
-            approved = {**request, "dangerous": True}
-            hook = subprocess.run(
-                [sys.executable, "-m", "computer_use.hook"],
-                input=json.dumps(
-                    {
-                        "hook_event_name": "PreToolUse",
-                        "tool_name": "mcp__computer-use__click",
-                        "tool_input": approved,
-                    },
-                    ensure_ascii=False,
-                ).encode("utf-8"),
-                env={**os.environ, "LOCALAPPDATA": str(tmp_path)},
-                capture_output=True,
-                check=True,
-            )
-            decision = json.loads(hook.stdout)["hookSpecificOutput"]
-            assert decision["permissionDecision"] == "ask"
-            assert "点编辑区里的字" in decision["permissionDecisionReason"]
-            clicked = await client.call_tool("click", approved)
-            return str(refused.value), clicked.data
+def wait() -> None:
+    sys.stdin.read()
+    win32gui.PostMessage(hwnd, win32con.WM_QUIT, 0, 0)
 
-    refusal, clicked = asyncio.run(call())
+threading.Thread(target=wait, daemon=True).start()
+win32gui.PumpMessages()
+"""
 
-    assert "删除" in refusal
-    assert clicked["window"]["handle"] == window["handle"]
-    assert win32gui.GetForegroundWindow() == window["handle"], "点击没有落在记事本上"
-    assert list((tmp_path / "computer-use" / "tickets").iterdir()) == []
+
+def test_点在写着高危词的地方_真实_OCR_在同一次调用里问人_确认后才点击(tmp_path: Path) -> None:
+    # 新版记事本的编辑框不会把 SetWindowText 画进截图，OCR 读不到。另开一个进程画这几个字。
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _WORD_WINDOW],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert proc.stdout is not None and proc.stdin is not None
+    try:
+        hwnd = int(proc.stdout.readline())
+        desktop = Win32Desktop(data_dir=tmp_path / "computer-use")
+        _await_handle(lambda: list_windows(desktop), hwnd)
+        label = win32gui.FindWindowEx(hwnd, 0, "STATIC", None)
+        assert label, "没找到写着高危词的控件"
+        left, top, _, _ = win32gui.GetWindowRect(label)
+        asked: dict[str, str] = {}
+        failed: list[BaseException] = []
+
+        def allow() -> None:
+            try:
+                asked["text"] = _answer_native_confirm("允许")
+            except BaseException as error:
+                failed.append(error)
+
+        async def call() -> dict[str, Any]:
+            async with Client(create_server(desktop)) as client:
+                await client.call_tool("declare_scope", {"handles": [hwnd]})
+                observed = await client.call_tool("observe_window", {"handle": hwnd})
+                meta = observed.data["metadata"]
+                request = {
+                    "screenshot_id": meta["screenshot_id"],
+                    "x": round((left + 40 * meta["dpi_scale"] - meta["screen_offset"]["x"]) * meta["scale"]),
+                    "y": round((top + 20 * meta["dpi_scale"] - meta["screen_offset"]["y"]) * meta["scale"]),
+                    "intent": "点这个字",
+                    "dangerous": False,
+                }
+                confirmer = threading.Thread(target=allow)
+                confirmer.start()
+                try:
+                    clicked = await client.call_tool("click", request)
+                finally:
+                    confirmer.join(timeout=20)
+                return cast(dict[str, Any], clicked.data)
+
+        clicked = asyncio.run(call())
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=10)
+
+    if failed:
+        raise failed[0]
+    assert "删除" in asked["text"]
+    assert "重新调用" not in asked["text"]
+    assert "dangerous" not in asked["text"]
+    assert clicked["window"]["handle"] == hwnd
+    tickets = tmp_path / "computer-use" / "tickets"
+    assert not tickets.exists() or list(tickets.iterdir()) == []
 
 
 def test_中文打进记事本_原来的剪贴板内容被放回(
@@ -519,6 +553,44 @@ def _dpi_unaware_cursor() -> tuple[int, int]:
     return int(x), int(y)
 
 
+def _answer_native_confirm(button: str, timeout: float = 15.0) -> str:
+    """点掉本进程弹出的原生确认，返回说明文字。对话框没出现时抛 `AssertionError`。"""
+
+    deadline = time.monotonic() + timeout
+    hwnd = 0
+    target = 0
+    while time.monotonic() < deadline:
+        hwnd = win32gui.FindWindow("ComputerUseConfirm", None)
+        target = _child_button(hwnd, button) if hwnd else 0
+        if target:
+            break
+        time.sleep(0.05)
+    assert hwnd and target, "没有弹出原生确认对话框"
+    texts: list[str] = []
+
+    def collect(child: int, _: object) -> bool:
+        if win32gui.GetClassName(child) == "Edit":
+            texts.append(win32gui.GetWindowText(child))
+        return True
+
+    win32gui.EnumChildWindows(hwnd, collect, None)
+    win32gui.SendMessage(target, win32con.BM_CLICK, 0, 0)
+    return "\n".join(texts)
+
+
+def _child_button(hwnd: int, label: str) -> int:
+    found = 0
+
+    def match(child: int, _: object) -> bool:
+        nonlocal found
+        if win32gui.GetClassName(child) == "Button" and win32gui.GetWindowText(child) == label:
+            found = child
+        return True
+
+    win32gui.EnumChildWindows(hwnd, match, None)
+    return found
+
+
 def _await_dialog(desktop: Win32Desktop, owner: int, timeout: float = 5.0) -> bool:
     """等到 `owner` 弹出一个有标题的窗口，例如记事本的打开文件对话框。"""
 
@@ -529,6 +601,19 @@ def _await_dialog(desktop: Win32Desktop, owner: int, timeout: float = 5.0) -> bo
                 return True
         time.sleep(0.2)
     return False
+
+
+def _await_handle(
+    observe: Callable[[], list[dict[str, Any]]], handle: int, timeout: float = 15.0
+) -> None:
+    """等到这扇窗口出现在观察里。"""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(window["handle"] == handle for window in observe()):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"窗口 {handle} 在 {timeout}s 内没有出现在观察里")
 
 
 def _await_notepad(

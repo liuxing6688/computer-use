@@ -1,10 +1,13 @@
-"""危险动作判定与拦截：模型自报与落点 OCR 取并集，判为危险的动作只在经人裁决后执行。
+"""危险动作判定与拦截。
 
-这是"写错了也看起来正常工作"的部分（ADR-0002），负向用例与正向用例同等重要。
+模型自报为危险的动作只在经人裁决后执行。落点 OCR 命中高危词而模型自报不危险时，
+同一次调用里用原生对话框问人。这是"写错了也看起来正常工作"的部分（ADR-0002），
+负向用例与正向用例同等重要。
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from datetime import timedelta
@@ -12,12 +15,15 @@ from typing import Any
 
 import pytest
 
+from fastmcp import Client
+
 from computer_use.action_log import Intercepted
 from computer_use.danger import judge_call, judge_nearby_text
 from computer_use.desktop import Rect
 from computer_use.hook import decide, run
 from computer_use.observation import Screenshots
 from computer_use.scope import TaskScope
+from computer_use.server import INSTRUCTIONS, create_server
 from computer_use.tools import click, declare_scope, observe_window
 
 from .fake_desktop import FakeDesktop, window
@@ -132,14 +138,47 @@ def _ready(desktop: FakeDesktop) -> tuple[Screenshots, TaskScope, str]:
     return screenshots, scope, screenshot_id
 
 
-def test_OCR_命中高危词时即使模型未自报也拦截_不注入点击() -> None:
+def test_模型自报不危险但落点附近有高危词时_同一次调用经人确认后才点击() -> None:
     desktop = _desktop()
     screenshots, scope, screenshot_id = _ready(desktop)
 
-    with pytest.raises(Intercepted, match="删除") as intercepted:
+    click(desktop, screenshots, scope, screenshot_id, 630, 412, intent="点这一行", dangerous=False)
+
+    assert desktop.clicks == [(630, 412)]
+    assert desktop.tickets == {}
+    [dialog] = desktop.dialogs
+    assert dialog.timeout == 60
+    assert "删除" in dialog.message
+    assert "点这一行" in dialog.message
+
+
+def test_人拒绝高危词确认时不点击_也不要求改标志重试() -> None:
+    desktop = _desktop()
+    desktop.dialog_reply = False
+    screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="拒绝") as intercepted:
         click(desktop, screenshots, scope, screenshot_id, 630, 412, intent="点这一行", dangerous=False)
 
-    assert "dangerous" in str(intercepted.value)
+    message = str(intercepted.value)
+    assert "重新调用" not in message
+    assert "dangerous" not in message
+    assert desktop.clicks == []
+    assert len(desktop.dialogs) == 1
+
+
+def test_高危词确认超时按拒绝处理且不点击() -> None:
+    desktop = _desktop()
+    desktop.dialog_reply = None
+    screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="超时") as intercepted:
+        click(desktop, screenshots, scope, screenshot_id, 630, 412, intent="点这一行", dangerous=False)
+
+    message = str(intercepted.value)
+    assert "拒绝" in message
+    assert "重新调用" not in message
+    assert "dangerous" not in message
     assert desktop.clicks == []
 
 
@@ -150,6 +189,39 @@ def test_高危词离落点较远时不因它拦截() -> None:
     click(desktop, screenshots, scope, screenshot_id, 100, 100, intent="点编辑区", dangerous=False)
 
     assert desktop.clicks == [(100, 100)]
+
+
+def test_说明不再指示模型因高危词改标志重试() -> None:
+    start = INSTRUCTIONS.index("高危词")
+    sentence = INSTRUCTIONS[start : INSTRUCTIONS.index("。", start) + 1]
+
+    assert "对话框" in sentence
+    assert "重新调用" not in sentence
+    assert "设为 true" not in sentence
+
+    async def description() -> str:
+        async with Client(create_server(FakeDesktop())) as client:
+            tools = await client.list_tools()
+        click_tool = next(tool for tool in tools if tool.name == "click")
+        return click_tool.description or ""
+
+    click_description = asyncio.run(description())
+    start = click_description.index("高危词")
+    sentence = click_description[start : click_description.index("。", start) + 1]
+    assert "对话框" in sentence
+    assert "重新调用" not in sentence
+    assert "设为 true" not in sentence
+
+
+def test_模型自报为危险时高危词仍走裁决凭据_不弹原生对话框() -> None:
+    desktop = _desktop()
+    screenshots, scope, screenshot_id = _ready(desktop)
+
+    with pytest.raises(Intercepted, match="裁决"):
+        click(desktop, screenshots, scope, screenshot_id, 630, 412, intent="点删除按钮", dangerous=True)
+
+    assert desktop.dialogs == []
+    assert desktop.clicks == []
 
 
 def test_模型自报为危险而未经人裁决时拦截_原样重试也拦截() -> None:

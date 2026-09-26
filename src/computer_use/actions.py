@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 from computer_use.action_log import Intercepted
-from computer_use.confirmation import confirm_outbound
+from computer_use.confirmation import confirm_nearby_words, confirm_outbound
 from computer_use.danger import Verdict, judge_call, judge_nearby_text, read_nearby
 from computer_use.desktop import Clipboard, ClipboardUnavailable, DesktopPort, Window
 from computer_use.interception import require_ruling
@@ -65,7 +65,8 @@ def click(
     """在截图 `screenshot_id` 的像素 `(x, y)` 处单击。
 
     落点未通过命中测试、或截图之后落点附近的界面已经变化时抛 `Intercepted`，裁决凭据也救不回来；
-    模型自报或落点附近的文字判为危险、又没有经人裁决时同样抛 `Intercepted`。
+    模型自报为危险、又没有经人裁决时同样抛 `Intercepted`。
+    模型自报不危险、但落点附近有高危词时，同一次调用弹出原生对话框，人拒绝或超时则抛 `Intercepted`。
     成功时附带变化说明；拦截或失败时不返回。
     """
 
@@ -432,11 +433,21 @@ def _prepare_points(
     windows = [scope.admit(desktop, x, y) for x, y in screen]
     confirm_unchanged(desktop, screenshot, screen[0][0], screen[0][1], windows[0])
     nearby = read_nearby(desktop, screenshot, screen[0][0], screen[0][1])
-    verdict = judge_call(tool, arguments) | judge_nearby_text(nearby) | _high_risk_windows(desktop, windows)
+    nearby_verdict = judge_nearby_text(nearby)
+    verdict = judge_call(tool, arguments) | _high_risk_windows(desktop, windows)
+    if arguments.get("dangerous") is not False:
+        verdict = verdict | nearby_verdict
     cleared = gate.over_budget()
     if cleared:
         verdict = verdict | budget_verdict()
     require_ruling(desktop, tool, arguments, verdict)
+    if arguments.get("dangerous") is False:
+        confirm_nearby_words(
+            desktop,
+            intent=str(arguments.get("intent") or ""),
+            nearby=nearby,
+            window=windows[0],
+        )
     confirm_outbound(
         desktop,
         scope,

@@ -190,11 +190,12 @@ def test_声明作用域与点击可经由_MCP_调用_拒绝与成功都记入�
     assert clicked_record["evidence"] is None
 
 
-def test_危险点击经由_MCP_被拦截_带_confirmed_重试也不放行_经_hook_交人裁决后才执行() -> None:
+def test_未自报的高危词在同一次调用里问人_自报为危险仍须裁决凭据() -> None:
     desktop = FakeDesktop(
         [window(handle=1, title="订单管理", rect=Rect(100, 50, 320, 240))],
         texts=[(Rect(300, 250, 40, 20), "删除")],
     )
+    desktop.dialog_reply = False
 
     async def call() -> list[str]:
         refusals = []
@@ -225,7 +226,11 @@ def test_危险点击经由_MCP_被拦截_带_confirmed_重试也不放行_经_h
 
     refusals = asyncio.run(call())
 
-    assert "删除" in refusals[0]
+    assert "拒绝" in refusals[0]
+    assert "重新调用" not in refusals[0]
+    assert "dangerous" not in refusals[0]
+    [dialog] = desktop.dialogs
+    assert "删除" in dialog.message
     assert "confirmed" in refusals[2]
     assert desktop.clicks == [(320, 260)]
     records = [r for r in desktop.action_log() if r["tool"] == "click"]
